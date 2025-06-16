@@ -147,7 +147,7 @@ for message in st.session_state.messages:
             
             elif message["content"].get("type") == "file_display":
                 if message["content"]["mime"].startswith("image/"):
-                    st.image(message["content"]["data"], caption=message["content"].get("caption", "Generated Image"), use_column_width=True)
+                    st.image(message["content"]["data"], caption=message["content"].get("caption", "Generated Image"), use_container_width=True) # FIXED HERE
                 else:
                     st.info(f"File created: {message['content']['file_name']}")
                 
@@ -254,12 +254,8 @@ if st.session_state.pending_action:
                     detected_filenames = [f.strip() for f in detected_filenames_str.split(',')]
                     execution_result = execution_result.replace(f"Files created during execution: {detected_filenames_str}", "").strip()
                 else:
-                    # Fallback: Check for any image files in the current directory that weren't there before
-                    # This requires tracking initial files, which is already done in python_executor
-                    pass # The python_executor itself will return the "Files created during execution" line.
-                         # This block is mainly for extracting it from the overall output.
-                         # If that line wasn't present, we don't do a secondary filesystem scan here.
-
+                
+                    pass 
                 # Display detected files
                 for filename in detected_filenames:
                     file_path = Path(filename)
@@ -345,7 +341,7 @@ if st.session_state.pending_final_answer:
             with st.container():
                 st.markdown("---")
                 file_msg_content = st.session_state.last_generated_plot_file
-                st.image(file_msg_content["data"], caption=file_msg_content.get("caption", "Generated Plot"), use_column_width=True)
+                st.image(file_msg_content["data"], caption=file_msg_content.get("caption", "Generated Plot"), use_container_width=True) # FIXED HERE
                 st.download_button(
                     label=file_msg_content.get("download_label"),
                     data=file_msg_content.get("data"),
@@ -396,9 +392,6 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
         st.session_state.last_agent_action_log_entry = None
         
         # --- MODIFIED COMPLETION LOGIC ---
-        # Only force completion if:
-        # 1. Code executed successfully (no stderr).
-        # 2. This is a single-step task (execution_count == 1) OR the agent has looped too many times (e.g., > 5 steps).
         if "Standard Output:" in current_observation and "Standard Error:" not in current_observation:
             raw_output = current_observation.replace("Standard Output:", "").strip()
             
@@ -441,11 +434,7 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 st.markdown(f"**Agent's Final Response:** {agent_output}")
                 st.session_state.messages.append({"role": "assistant", "content": agent_output})
 
-                # This block for file matches is actually redundant if python_executor
-                # already reports and `last_generated_plot_file` or `last_generated_chart_data`
-                # handles it. The agent's final output should typically be a summary
-                # through `task_completed` anyway. Leaving it for now as it doesn't harm,
-                # but might not be triggered if agent follows prompt to use `task_completed`.
+
                 file_matches = re.findall(r"Files created during execution: (.*)", agent_output, re.DOTALL)
                 
                 if file_matches:

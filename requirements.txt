@@ -9,3 +9,5 @@ autopep8
 pandas
 matplotlib
 seaborn
+pillow
+ffmpeg

@@ -37,23 +37,19 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"^\s*```(?:python)?\s*$", re.IGNORECASE),
             re.compile(r"^\s*```$", re.IGNORECASE),
             re.compile(r"^\s*\.\.\.\s*$", re.IGNORECASE),
-            # Add more specific conversational full-line patterns here if observed
             re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before execution\.?|Please wait for the Observation\.)\s*$", re.IGNORECASE),
         ]
         
-        # Patterns for input() calls to be commented out
         INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
-        # Patterns for common unwanted text that might appear *within* a line of code or at its end
-        # This is the key part to fix the "execution." syntax error.
         CONVERSATIONAL_IN_LINE_PATTERNS = [
             re.compile(r"Please confirm the code before execution\.?", re.IGNORECASE),
-            re.compile(r"execution\.?", re.IGNORECASE), # Targeting "execution." specifically
+            re.compile(r"execution\.?", re.IGNORECASE), 
             re.compile(r"Here is the code:", re.IGNORECASE),
             re.compile(r"The code is as follows:", re.IGNORECASE),
             re.compile(r"This is the Python code:", re.IGNORECASE),
             re.compile(r"Please wait for the Observation\.", re.IGNORECASE),
-            re.compile(r"```python", re.IGNORECASE), # In case these appear mid-line or are not fully stripped
+            re.compile(r"```python", re.IGNORECASE), 
             re.compile(r"```", re.IGNORECASE),
             re.compile(r"\.\.\.", re.IGNORECASE),
         ]
@@ -62,7 +58,6 @@ class PythonCodeExecutorTool(BaseTool):
         for line in lines:
             original_line_stripped = line.strip()
 
-            # First, check if the entire stripped line matches a non-code line pattern.
             is_non_code_line = False
             for pattern in NON_CODE_LINE_PATTERNS:
                 if pattern.fullmatch(original_line_stripped):
@@ -72,30 +67,21 @@ class PythonCodeExecutorTool(BaseTool):
             if is_non_code_line:
                 continue 
 
-            processed_line = line # Start with the original line, preserving its indentation
-
-            # Apply conversational text cleaning within the line
+            processed_line = line 
             for pattern in CONVERSATIONAL_IN_LINE_PATTERNS:
-                processed_line = pattern.sub("", processed_line) # Remove the pattern
+                processed_line = pattern.sub("", processed_line)
             
-            # Re-strip after potential in-line replacements to clean up resulting whitespace
-            # This is to ensure lines like "   execution.   " become empty, not just "   "
             processed_line_content = processed_line.strip()
 
-            # Comment out input() calls
             if INPUT_CALL_PATTERN.search(processed_line_content):
-                # Ensure it's not commenting out a string literal that contains "input("
-                # This simple check avoids false positives on `print("user input")` etc.
                 if "input(" in processed_line_content and not (processed_line_content.startswith(('"', "'")) and processed_line_content.endswith(('"', "'"))):
                     processed_line = processed_line.replace(processed_line_content, INPUT_CALL_PATTERN.sub("# Removed input() for safety, use hardcoded values #", processed_line_content))
             
-            # Only add the line if it's not empty after all processing
-            if processed_line.strip(): # Check if it contains any non-whitespace characters
+            if processed_line.strip(): 
                 filtered_lines.append(processed_line)
         
         pre_formatted_code = "\n".join(filtered_lines).strip()
 
-        # --- Automated Code Formatting (autopep8) ---
         if not pre_formatted_code:
             return ""
 

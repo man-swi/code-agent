@@ -38,12 +38,11 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"^\s*```$", re.IGNORECASE),
             re.compile(r"^\s*\.\.\.\s*$", re.IGNORECASE),
             re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before execution\.?|Please wait for the Observation\.)\s*$", re.IGNORECASE),
-            # Add more specific conversational patterns if observed
+            re.compile(r"^\s*(?:Thought:.*|Action:.*|Action Input:.*|Observation:.*)\s*$", re.IGNORECASE), # Added from previous suggestion
         ]
         
         INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
-        # Patterns for conversational text *within* lines that should be removed
         CONVERSATIONAL_IN_LINE_PATTERNS = [
             re.compile(r"Please confirm the code before execution\.?", re.IGNORECASE),
             re.compile(r"execution\.?", re.IGNORECASE), 
@@ -54,10 +53,16 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"```python", re.IGNORECASE), 
             re.compile(r"```", re.IGNORECASE),
             re.compile(r"\.\.\.", re.IGNORECASE),
-            # New: More aggressive stripping of leading/trailing non-code text
-            re.compile(r"^\s*(?:Thought:.*|Action:.*|Action Input:.*|Observation:.*)\s*$", re.IGNORECASE),
         ]
 
+        # --- NEW PRE-PROCESSING RULES for common LLM hallucinations ---
+        REPLACEMENT_MAP = {
+            # Fix 'report' instead of 'import'
+            re.compile(r"^\s*report\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*$", re.IGNORECASE): r"import \1",
+            re.compile(r"^\s*report\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*$", re.IGNORECASE): r"import \1 as \2",
+            re.compile(r"^\s*from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+report\s+([a-zA-Z_][a-zA-Z0-9_,\s]*)\s*$", re.IGNORECASE): r"from \1 import \2",
+        }
+        # --- End NEW ---
 
         for line in lines:
             original_line_stripped = line.strip()
@@ -78,10 +83,16 @@ class PythonCodeExecutorTool(BaseTool):
             processed_line_content = processed_line.strip()
 
             if INPUT_CALL_PATTERN.search(processed_line_content):
-                # Ensure we only replace input() if it's a call, not just part of a string
                 if "input(" in processed_line_content and not (processed_line_content.count('"') % 2 == 0 and processed_line_content.count("'") % 2 == 0 and '"' in processed_line_content and "'" in processed_line_content):
                     processed_line = processed_line.replace(processed_line_content, INPUT_CALL_PATTERN.sub("# Removed input() for safety, use hardcoded values #", processed_line_content))
             
+            # --- Apply NEW pre-processing replacements ---
+            for pattern, replacement in REPLACEMENT_MAP.items():
+                if pattern.match(processed_line): # Use match for start of line
+                    processed_line = pattern.sub(replacement, processed_line)
+                    break # Apply only one matching rule per line
+            # --- End NEW ---
+
             if processed_line.strip(): 
                 filtered_lines.append(processed_line)
         
@@ -92,7 +103,6 @@ class PythonCodeExecutorTool(BaseTool):
 
         try:
             autopep8_path = [sys.executable, "-m", "autopep8"]
-            # Check if autopep8 is installed first
             subprocess.run(autopep8_path + ["--version"], capture_output=True, check=True, text=True, timeout=5)
 
             process = subprocess.run(
@@ -105,19 +115,15 @@ class PythonCodeExecutorTool(BaseTool):
             )
             formatted_code = process.stdout.strip()
             if not formatted_code and pre_formatted_code:
-                # If autopep8 produced empty output but input was not empty, it likely failed.
-                # In this case, return a message to the agent that autopep8 failed.
-                # The agent might then deduce a severe syntax error.
                 sys.stderr.write("Warning: autopep8 returned empty output for non-empty input. Using pre-formatted code. This might indicate severe syntax issues.\n")
-                return "AUTOPEP8_FORMATTING_FAILED:" + pre_formatted_code # Signal to the agent
+                return "AUTOPEP8_FORMATTING_FAILED:" + pre_formatted_code
             return formatted_code
         except FileNotFoundError:
             sys.stderr.write("Warning: autopep8 not found. Please install it (`pip install autopep8`) for robust code formatting. Skipping formatting.\n")
             return pre_formatted_code
         except subprocess.CalledProcessError as e:
-            # autopep8 failed with an error, e.g., severe syntax issues
             sys.stderr.write(f"Warning: autopep8 failed to format code (might be a critical syntax error): {e.stderr.strip()}. Using pre-formatted code.\n")
-            return "AUTOPEP8_FORMATTING_FAILED:" + pre_formatted_code # Signal to the agent
+            return "AUTOPEP8_FORMATTING_FAILED:" + pre_formatted_code
         except subprocess.TimeoutExpired:
             sys.stderr.write("Warning: autopep8 process timed out. Using pre-formatted code.\n")
             return pre_formatted_code
@@ -126,13 +132,12 @@ class PythonCodeExecutorTool(BaseTool):
             return pre_formatted_code
 
     def _run(self, code: str) -> str:
-        # This method is primarily for schema validation, the real execution is in execute_code_after_approval
         cleaned_code = self._clean_code(code)
         if cleaned_code.startswith("AUTOPEP8_FORMATTING_FAILED:"):
             return f"Error: Code formatting failed, likely due to severe syntax issues. Please review your code carefully.\n{cleaned_code.replace('AUTOPEP8_FORMATTING_FAILED:', '')}"
         if not cleaned_code:
             return "Error: No valid Python code provided after cleaning. The input might have been empty or only markdown."
-        return cleaned_code # In _run, we just return the cleaned code.
+        return cleaned_code
 
     def execute_code_after_approval(self, raw_code_input: str) -> str:
         cleaned_code = self._clean_code(raw_code_input)
@@ -148,7 +153,7 @@ class PythonCodeExecutorTool(BaseTool):
                 [sys.executable, '-c', cleaned_code],
                 capture_output=True,
                 text=True,
-                timeout=60, # Keep timeout as is
+                timeout=60,
                 check=False
             )
 
@@ -159,7 +164,7 @@ class PythonCodeExecutorTool(BaseTool):
                 error_message = process.stderr.strip()
                 output_parts.append(f"Standard Error:\n{error_message}")
                 
-                # --- NEW: Enhanced Error Feedback ---
+                # --- NEW: Enhanced Error Feedback (from previous suggestion, still relevant) ---
                 if "NameError: name 'time' is not defined" in error_message or "NameError: name 'plt' is not defined" in error_message or "NameError: name 'pd' is not defined" in error_message:
                     output_parts.append("\n**HINT:** This looks like a missing import. Remember to include `import time`, `import matplotlib.pyplot as plt`, `import pandas as pd`, etc., at the beginning of your script if you're using functions or objects from those libraries.")
                 elif "NameError:" in error_message or "ImportError:" in error_message:

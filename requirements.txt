@@ -1,0 +1,11 @@
+streamlit
+langchain
+langchain-core
+langchain-groq
+python-dotenv
+pydantic
+pydantic-settings
+autopep8
+pandas
+matplotlib
+seaborn

@@ -28,27 +28,42 @@ st.set_page_config(page_title="AI Code Assistant", page_icon="🤖")
 st.title("AI Code Assistant (Groq)")
 st.caption("A ReAct agent powered by Groq (Llama3) for Python code generation and execution.")
 
+# --- Helper to generate a unique/descriptive chat name ---
+def generate_chat_name(initial_prompt: str) -> str:
+    """Generates a concise name for a chat based on its first prompt."""
+    if not initial_prompt:
+        return "Untitled Chat"
+    
+    # Simple truncation for display
+    name = initial_prompt.strip()
+    if len(name) > 30:
+        return name[:27] + "..."
+    return name
+
 # --- Session State Initialization and Reset Function ---
 def initialize_session_state():
     """Initializes or resets all relevant session state variables for a new chat."""
 
     # --- MODIFIED/NEW: Master list for all conversations and current index ---
     if "all_conversations" not in st.session_state:
-        st.session_state.all_conversations = [] # List of lists of message dicts
+        st.session_state.all_conversations = [] # List of dictionaries: {'name': str, 'messages': list}
         st.session_state.current_conversation_index = -1 # No chat active initially
 
     # Ensure there's always at least one conversation to start with, or if switching
     if not st.session_state.all_conversations: # First run ever, or all chats were deleted
-        st.session_state.all_conversations.append([{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}])
+        st.session_state.all_conversations.append({
+            'name': 'New Chat', # Default name for the first chat
+            'messages': [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
+        })
         st.session_state.current_conversation_index = 0
     elif st.session_state.current_conversation_index == -1: # After a "New Chat" logic but before full re-init
-         st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
+        st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
 
 
     # Link st.session_state.messages to the currently active conversation in the list
     # All subsequent append/read operations on st.session_state.messages will automatically
     # act on the selected conversation's history.
-    st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]
+    st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]['messages']
     # --- END MODIFIED/NEW ---
 
     # Initialize Agent Executor and Tools
@@ -71,12 +86,12 @@ def initialize_session_state():
                 # Other structured message types (charts, files) are for UI display, not directly agent memory.
             
             agent_exec = get_agent_executor()
-            # --- THE TRUE CRITICAL FIX IS ON THESE LINES ---
+            # --- THE CRITICAL FIX IS ON THESE LINES ---
             # Clear any existing messages in the buffer (from previous initializations)
             agent_exec.memory.clear()
             # Extend the buffer with the current conversation's history
             agent_exec.memory.buffer.extend(lc_chat_history)
-            # --- END OF TRUE CRITICAL FIX ---
+            # --- END OF CRITICAL FIX ---
 
             python_executor_tool = next(tool for tool in agent_exec.tools if tool.name == "python_code_executor")
             task_completed_tool = next(tool for tool in agent_exec.tools if tool.name == "task_completed")
@@ -127,16 +142,18 @@ initialize_session_state()
 # Function to reset the chat for a new conversation
 def reset_chat_and_agent():
     # --- MODIFIED: Save current conversation before starting a new one ---
-    # Ensure the current conversation's messages are updated in the master list
-    # (This is implicitly handled because st.session_state.messages is a reference)
+    # (The current conversation is already saved by reference via st.session_state.messages)
     
-    # Create a new, empty conversation and make it the current one
-    new_chat_messages = [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
-    st.session_state.all_conversations.append(new_chat_messages)
+    # Create a new, empty conversation with a default name
+    new_chat_entry = {
+        'name': 'New Chat',
+        'messages': [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
+    }
+    st.session_state.all_conversations.append(new_chat_entry)
     st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
     
-    # Update st.session_state.messages to point to this new conversation
-    st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]
+    # Update st.session_state.messages to point to this new conversation's messages
+    st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]['messages']
     # --- END MODIFIED ---
 
     st.session_state.needs_reinitialization = True # Force agent re-init for new chat
@@ -170,36 +187,36 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # --- NEW: Conversation Selector ---
-    chat_options = [f"Chat {i+1}" for i in range(len(st.session_state.all_conversations))]
+    # --- MODIFIED: Conversation Selector to display names ---
+    chat_names = [conv['name'] for conv in st.session_state.all_conversations]
     
     # Ensure index is valid, especially on first load
     current_idx_for_selectbox = st.session_state.current_conversation_index if st.session_state.current_conversation_index >= 0 else 0
     
     # Use a dummy key if chat_options is empty to avoid Streamlit errors on first run
-    selector_key = "chat_selector" if chat_options else "chat_selector_empty"
+    selector_key = "chat_selector" if chat_names else "chat_selector_empty"
 
     selected_chat_label = st.selectbox(
         "Select Conversation", 
-        chat_options, 
+        chat_names, # Use chat_names for display
         index=current_idx_for_selectbox, 
         key=selector_key
     )
 
     # Logic to switch chat if a different one is selected
-    if selected_chat_label and chat_options: # Ensure chat_options is not empty
-        new_index = chat_options.index(selected_chat_label)
+    if selected_chat_label and chat_names: # Ensure chat_names is not empty
+        new_index = chat_names.index(selected_chat_label)
         if new_index != st.session_state.current_conversation_index:
-            # 1. (No explicit save needed, as st.session_state.messages is a reference)
+            # The current conversation is already saved by reference
 
-            # 2. Update to the newly selected conversation
+            # Update to the newly selected conversation index
             st.session_state.current_conversation_index = new_index
-            st.session_state.messages = st.session_state.all_conversations[new_index] # Update the pointer
+            st.session_state.messages = st.session_state.all_conversations[new_index]['messages'] # Update the messages pointer
 
-            # 3. Force agent re-initialization with the history of the selected chat
+            # Force agent re-initialization with the history of the selected chat
             st.session_state.needs_reinitialization = True
             
-            # 4. Reset any pending HIL states for a clean transition
+            # Reset any pending HIL states for a clean transition
             st.session_state.pending_action = None
             st.session_state.pending_final_answer = None
             st.session_state.agent_continuation_needed = False
@@ -214,7 +231,7 @@ with st.sidebar:
             st.session_state.execution_count = 0
 
             st.rerun()
-    # --- END NEW ---
+    # --- END MODIFIED ---
     
     if st.button("New Chat", on_click=reset_chat_and_agent, help="Start a fresh conversation and clear agent memory."):
         pass # The on_click handler will trigger the logic and rerun
@@ -448,8 +465,8 @@ if st.session_state.pending_final_answer:
                 st.subheader(chart_msg_content.get("title", "Generated Chart"))
                 try:
                     df = chart_msg_content["data"]
-                    x_label = chart_msg_content.get("x_label")
-                    y_label = chart_msg_content.get("y_label")
+                    x_label = message["content"].get("x_label")
+                    y_label = message["content"].get("y_label")
                     if x_label and y_label and x_label in df.columns and y_label in df.columns:
                         st.line_chart(df, x=x_label, y=y_label, use_container_width=True)
                     else:
@@ -603,7 +620,7 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                                 st.session_state.messages.append({"role": "assistant", "content": file_display_data})
                                 
                             except Exception as file_display_e:
-                                st.warning(f"Could not display or prepare download for generated file ({filename}): {file_display_e}")
+                                st.warning(f"Could not load or display file {filename}: {file_display_e}")
                         else:
                             st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
                 
@@ -668,4 +685,9 @@ if not st.session_state.pending_action and \
     if user_prompt:
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         st.session_state.last_user_prompt = user_prompt
+        # --- NEW: Update chat name on first user prompt in a 'New Chat' ---
+        current_chat_entry = st.session_state.all_conversations[st.session_state.current_conversation_index]
+        if current_chat_entry['name'] == 'New Chat': # Only update if it's the default name
+            current_chat_entry['name'] = generate_chat_name(user_prompt)
+        # --- END NEW ---
         st.rerun()

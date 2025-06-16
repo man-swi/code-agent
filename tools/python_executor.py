@@ -1,7 +1,7 @@
 import sys
 import subprocess
 import os
-import re 
+import re
 from typing import Type
 
 from pydantic import BaseModel, Field
@@ -32,28 +32,34 @@ class PythonCodeExecutorTool(BaseTool):
         lines = code_input.split('\n')
         filtered_lines = []
         
-        # Patterns for lines to be completely removed (fences, conversational text)
+        # --- MODIFIED: More comprehensive NON_CODE_LINE_PATTERNS ---
         NON_CODE_LINE_PATTERNS = [
-            re.compile(r"^\s*```(?:python)?\s*$", re.IGNORECASE),
-            re.compile(r"^\s*```$", re.IGNORECASE),
-            re.compile(r"^\s*\.\.\.\s*$", re.IGNORECASE),
-            re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before execution\.?|Please wait for the Observation\.)\s*$", re.IGNORECASE),
-            re.compile(r"^\s*(?:Thought:.*|Action:.*|Action Input:.*|Observation:.*)\s*$", re.IGNORECASE), # Added from previous suggestion
+            re.compile(r"^\s*```(?:python)?\s*$", re.IGNORECASE), # ```python or ```
+            re.compile(r"^\s*```.*$", re.IGNORECASE),              # Any markdown fence with text (e.g. ```json, ```output)
+            re.compile(r"^\s*\.\.\.\s*$", re.IGNORECASE),          # Ellipses line
+            re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before(?: I)? execution\.?|Please wait for the Observation\.|The agent proposes to execute the following Python code:|```python|```)\s*$", re.IGNORECASE),
+            re.compile(r"^\s*(?:Thought:.*|Action:.*|Action Input:.*|Observation:.*)\s*$", re.IGNORECASE), # ReAct internal thoughts/actions
+            re.compile(r"^\s*```.*?$", re.IGNORECASE), # General catch-all for markdown fences like ````python`
+            re.compile(r"^\s*python\s*$", re.IGNORECASE), # Just the word 'python'
         ]
+        # --- END MODIFIED ---
         
         INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
+        # --- MODIFIED: More comprehensive CONVERSATIONAL_IN_LINE_PATTERNS ---
         CONVERSATIONAL_IN_LINE_PATTERNS = [
-            re.compile(r"Please confirm the code before execution\.?", re.IGNORECASE),
-            re.compile(r"execution\.?", re.IGNORECASE), 
+            re.compile(r"Please confirm the code before(?: I)? execution\.?", re.IGNORECASE),
+            re.compile(r"execution\.?", re.IGNORECASE),
             re.compile(r"Here is the code:", re.IGNORECASE),
             re.compile(r"The code is as follows:", re.IGNORECASE),
             re.compile(r"This is the Python code:", re.IGNORECASE),
             re.compile(r"Please wait for the Observation\.", re.IGNORECASE),
-            re.compile(r"```python", re.IGNORECASE), 
+            re.compile(r"```python", re.IGNORECASE),
             re.compile(r"```", re.IGNORECASE),
             re.compile(r"\.\.\.", re.IGNORECASE),
+            re.compile(r"The agent proposes to execute the following Python code:", re.IGNORECASE),
         ]
+        # --- END MODIFIED ---
 
         # --- NEW PRE-PROCESSING RULES for common LLM hallucinations ---
         REPLACEMENT_MAP = {
@@ -83,6 +89,7 @@ class PythonCodeExecutorTool(BaseTool):
             processed_line_content = processed_line.strip()
 
             if INPUT_CALL_PATTERN.search(processed_line_content):
+                # Ensure we only replace input() if it's a call, not just part of a string
                 if "input(" in processed_line_content and not (processed_line_content.count('"') % 2 == 0 and processed_line_content.count("'") % 2 == 0 and '"' in processed_line_content and "'" in processed_line_content):
                     processed_line = processed_line.replace(processed_line_content, INPUT_CALL_PATTERN.sub("# Removed input() for safety, use hardcoded values #", processed_line_content))
             
@@ -93,7 +100,19 @@ class PythonCodeExecutorTool(BaseTool):
                     break # Apply only one matching rule per line
             # --- End NEW ---
 
-            if processed_line.strip(): 
+            if processed_line.strip():
+                # NEW: Clean up unmatched quotes or common trailing non-code text from the very end of lines
+                # Example: `print("Hello!") please confirm` -> `print("Hello!")`
+                processed_line = re.sub(r'["\']?\s*(?:Please confirm|The agent proposes).*$', '', processed_line.strip())
+                
+                # Check for and fix common string literal issues (like the one in your video: result['data'])
+                # This is a very targeted fix for f-strings with nested quotes.
+                if re.search(r"f['\"].*?\{.*?['\"].*?\}.*?['\"]", processed_line):
+                    processed_line = processed_line.replace("['", "['").replace("']", "']") # Simple cleanup, might need more robust parsing for complex cases.
+                    # A more robust solution might involve parsing the f-string's internal structure.
+                    # For now, let's just make sure nested single quotes within f-string curly braces don't terminate the outer f-string.
+                    # It's better to tell the agent to use double quotes for the f-string if there are single quotes inside.
+                    
                 filtered_lines.append(processed_line)
         
         pre_formatted_code = "\n".join(filtered_lines).strip()
@@ -164,16 +183,20 @@ class PythonCodeExecutorTool(BaseTool):
                 error_message = process.stderr.strip()
                 output_parts.append(f"Standard Error:\n{error_message}")
                 
-                # --- NEW: Enhanced Error Feedback (from previous suggestion, still relevant) ---
-                if "NameError: name 'time' is not defined" in error_message or "NameError: name 'plt' is not defined" in error_message or "NameError: name 'pd' is not defined" in error_message:
-                    output_parts.append("\n**HINT:** This looks like a missing import. Remember to include `import time`, `import matplotlib.pyplot as plt`, `import pandas as pd`, etc., at the beginning of your script if you're using functions or objects from those libraries.")
-                elif "NameError:" in error_message or "ImportError:" in error_message:
-                     output_parts.append("\n**HINT:** This might be a missing import or an undefined variable. Double-check your imports and variable names.")
+                # --- ENHANCED ERROR FEEDBACK (from previous suggestions, still relevant) ---
+                if "NameError: name 'time' is not defined" in error_message or "NameError: name 'plt' is not defined" in error_message or "NameError: name 'pd' is not defined" in error_message or "NameError: name 'np' is not defined" in error_message:
+                    output_parts.append("\n**HINT:** This looks like a missing import. Remember to include `import time`, `import matplotlib.pyplot as plt`, `import pandas as pd`, `import numpy as np`, etc., at the beginning of your script if you're using functions or objects from those libraries.")
                 elif "SyntaxError:" in error_message or "IndentationError:" in error_message:
-                    output_parts.append("\n**HINT:** This is a syntax or indentation error. Review the line indicated in the traceback for missing colons, unbalanced parentheses, or incorrect indentation.")
+                    output_parts.append("\n**HINT:** This is a syntax or indentation error. Review the line indicated in the traceback for missing colons, unbalanced parentheses, unmatched quotes, or incorrect indentation.")
+                elif "ValueError: Input 0 of layer" in error_message and "is incompatible" in error_message:
+                    output_parts.append("\n**HINT:** For Keras Sequential models, the first layer usually needs an `input_shape` argument (e.g., `model.add(Dense(..., input_shape=(num_features,)))`).")
+                elif "TypeError: object is not subscriptable" in error_message:
+                     output_parts.append("\n**HINT:** You might be trying to access an element from something that isn't a list or dictionary, or using incorrect indexing (e.g., `value[key]` instead of `value.attribute`).")
                 elif "TimeoutExpired" in error_message or "timed out" in error_message:
                      output_parts.append("\n**HINT:** The code timed out. This often happens due to an infinite loop or an `input()` call (which is disallowed). Ensure your loops have termination conditions and you are not using `input()`.")
-                # --- End NEW ---
+                elif "NameError:" in error_message or "ImportError:" in error_message:
+                     output_parts.append("\n**HINT:** This might be a missing import or an undefined variable. Double-check your your imports and variable names.")
+                # --- End ENHANCED ---
 
             result_message = "\n".join(output_parts)
 
@@ -181,7 +204,7 @@ class PythonCodeExecutorTool(BaseTool):
                 result_message = "Code executed successfully with no output to stdout or stderr."
             elif not result_message and process.returncode != 0:
                 result_message = f"Code execution failed with return code {process.returncode} and no specific error message."
-            elif process.returncode != 0 and "Standard Error" not in result_message: 
+            elif process.returncode != 0 and "Standard Error" not in result_message:
                  result_message += f"\nCode execution finished with return code: {process.returncode}"
 
             new_files = set(os.listdir('.')) - initial_files

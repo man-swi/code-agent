@@ -41,6 +41,9 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"^\s*(?:Thought:.*|Action:.*|Action Input:.*|Observation:.*)\s*$", re.IGNORECASE), # ReAct internal thoughts/actions
             re.compile(r"^\s*```.*?$", re.IGNORECASE), # General catch-all for markdown fences like ````python`
             re.compile(r"^\s*python\s*$", re.IGNORECASE), # Just the word 'python'
+            re.compile(r"^\s*```\s*$", re.IGNORECASE), # Ensure empty code fences are caught
+            re.compile(r"^\s*Please confirm the code before I execute it\.\s*$", re.IGNORECASE), # Specific pattern from your video
+            re.compile(r"^\s*```python\s*$", re.IGNORECASE), # Specific pattern for python code blocks
         ]
         # --- END MODIFIED ---
         
@@ -58,6 +61,7 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"```", re.IGNORECASE),
             re.compile(r"\.\.\.", re.IGNORECASE),
             re.compile(r"The agent proposes to execute the following Python code:", re.IGNORECASE),
+            re.compile(r"^\s*```\s*$", re.IGNORECASE),
         ]
         # --- END MODIFIED ---
 
@@ -103,16 +107,15 @@ class PythonCodeExecutorTool(BaseTool):
             if processed_line.strip():
                 # NEW: Clean up unmatched quotes or common trailing non-code text from the very end of lines
                 # Example: `print("Hello!") please confirm` -> `print("Hello!")`
-                processed_line = re.sub(r'["\']?\s*(?:Please confirm|The agent proposes).*$', '', processed_line.strip())
+                # This regex removes " please confirm", " The agent proposes" etc. from the end of a line
+                processed_line = re.sub(r'["\']?\s*(?:Please confirm|The agent proposes|execution|Thought|Action|Observation|```|python|report).*$', '', processed_line.strip(), flags=re.IGNORECASE)
                 
-                # Check for and fix common string literal issues (like the one in your video: result['data'])
-                # This is a very targeted fix for f-strings with nested quotes.
-                if re.search(r"f['\"].*?\{.*?['\"].*?\}.*?['\"]", processed_line):
-                    processed_line = processed_line.replace("['", "['").replace("']", "']") # Simple cleanup, might need more robust parsing for complex cases.
-                    # A more robust solution might involve parsing the f-string's internal structure.
-                    # For now, let's just make sure nested single quotes within f-string curly braces don't terminate the outer f-string.
-                    # It's better to tell the agent to use double quotes for the f-string if there are single quotes inside.
-                    
+                # Further attempt to fix f-string quoting issues. Best is to prompt the model.
+                # This is a very targeted fix for f-strings with nested quotes, but not perfect.
+                if re.search(r"f['\"].*?\{.*?['\"].*?\}.*?['\"]", processed_line) and processed_line.strip().startswith("f'") and "['" in processed_line:
+                    # If f-string starts with single quote but has inner single quotes, try to switch to double
+                    processed_line = processed_line.replace("f'", "f\"").replace("'", "\"")
+                
                 filtered_lines.append(processed_line)
         
         pre_formatted_code = "\n".join(filtered_lines).strip()

@@ -18,8 +18,8 @@ from tools.task_completed import TaskCompletedTool
 # NEW: Import LangChain message types for injecting history into agent memory
 from langchain_core.messages import HumanMessage, AIMessage
 
-# NEW: Import chat utility functions
-from utils.chat_utils import generate_chat_name
+# NEW: Import generate_chat_name from chat_utils
+from chat_utils import generate_chat_name
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -31,39 +31,46 @@ st.set_page_config(page_title="AI Code Assistant", page_icon="🤖")
 st.title("AI Code Assistant (Groq)")
 st.caption("A ReAct agent powered by Groq (Llama3) for Python code generation and execution.")
 
+# --- Helper to generate a unique/descriptive chat name ---
+# REMOVED: Redundant generate_chat_name function, now imported from chat_utils.py
+# def generate_chat_name(initial_prompt: str) -> str:
+#     """Generates a concise name for a chat based on its first prompt."""
+#     if not initial_prompt:
+#         return "Untitled Chat"
+#     
+#     # Simple truncation for display
+#     name = initial_prompt.strip()
+#     if len(name) > 30:
+#         return name[:27] + "..."
+#     return name
+
 # --- Session State Initialization and Reset Function ---
 def initialize_session_state():
     """Initializes or resets all relevant session state variables for a new chat."""
 
     # --- MODIFIED/NEW: Master list for all conversations and current index ---
-    # Ensure 'all_conversations' is only initialized once per session (i.e., per 'streamlit run' command)
     if "all_conversations" not in st.session_state:
         st.session_state.all_conversations = [] # List of dictionaries: {'name': str, 'messages': list}
         st.session_state.current_conversation_index = -1 # No chat active initially
 
-    # Ensure there's always at least one conversation to start with on initial app load,
-    # or if all previous chats were somehow cleared.
-    if not st.session_state.all_conversations:
+    # Ensure there's always at least one conversation to start with, or if switching
+    if not st.session_state.all_conversations: # First run ever, or all chats were deleted
         st.session_state.all_conversations.append({
             'name': 'New Chat', # Default name for the first chat
             'messages': [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
         })
         st.session_state.current_conversation_index = 0
-    # This ensures that if the app reruns (e.g., on code change or browser refresh) and
-    # the index might have defaulted to -1 due to other logic, it correctly points to an existing chat.
-    elif st.session_state.current_conversation_index == -1: 
-         st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
+    elif st.session_state.current_conversation_index == -1: # After a "New Chat" logic but before full re-init
+        st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
 
 
-    # Link st.session_state.messages to the currently active conversation in the list.
-    # This is critical: any append/modification to st.session_state.messages
-    # will directly affect the chosen conversation in st.session_state.all_conversations.
+    # Link st.session_state.messages to the currently active conversation in the list
+    # All subsequent append/read operations on st.session_state.messages will automatically
+    # act on the selected conversation's history.
     st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]['messages']
     # --- END MODIFIED/NEW ---
 
     # Initialize Agent Executor and Tools
-    # This block re-initializes the agent (and its memory) ONLY when 'needs_reinitialization' is True.
-    # This flag is set when switching chats or starting a new chat, ensuring the agent has correct context.
     if "agent_executor" not in st.session_state or st.session_state.get("needs_reinitialization", False):
         try:
             # Convert current Streamlit messages to LangChain message format for agent memory
@@ -76,11 +83,14 @@ def initialize_session_state():
                         lc_chat_history.append(AIMessage(content=msg["content"]))
                 elif isinstance(msg["content"], dict) and msg["content"].get("type") == "code_execution":
                     # For code execution, include both the code input and the output for agent's context
+                    # This ensures agent remembers code and results properly.
+                    # It's crucial for agent to "see" what was executed and its outcome.
                     lc_chat_history.append(HumanMessage(content=f"Executed Python code:\n```python\n{msg['content']['code']}\n```"))
                     lc_chat_history.append(AIMessage(content=f"Code Execution Result:\n```\n{msg['content']['output']}\n```"))
+                # Other structured message types (charts, files) are for UI display, not directly agent memory.
             
             agent_exec = get_agent_executor()
-            # --- THE CRITICAL FIX FOR LANGCHAIN MEMORY ---
+            # --- THE CRITICAL FIX IS ON THESE LINES ---
             # Clear any existing messages in the buffer (from previous initializations)
             agent_exec.memory.clear()
             # Extend the buffer with the current conversation's history
@@ -98,7 +108,7 @@ def initialize_session_state():
             st.session_state.task_completed_tool = task_completed_tool
             st.session_state.callback_handler = callback_handler
             st.session_state.callback_logs_buffer = callback_logs_buffer
-            st.session_state.needs_reinitialization = False # Reset flag after successful re-init
+            st.session_state.needs_reinitialization = False
         except (ValueError, RuntimeError) as e:
             st.error(f"Failed to initialize Agent: {e}. Please ensure your Groq API key is correct and valid. Check Groq's model deprecation notices.")
             st.stop()
@@ -135,8 +145,8 @@ initialize_session_state()
 
 # Function to reset the chat for a new conversation
 def reset_chat_and_agent():
-    """Adds a new empty chat to the list and makes it the active one."""
-    # The current conversation is automatically saved as st.session_state.messages is a reference
+    # --- MODIFIED: Save current conversation before starting a new one ---
+    # (The current conversation is already saved by reference via st.session_state.messages)
     
     # Create a new, empty conversation with a default name
     new_chat_entry = {
@@ -148,6 +158,7 @@ def reset_chat_and_agent():
     
     # Update st.session_state.messages to point to this new conversation's messages
     st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]['messages']
+    # --- END MODIFIED ---
 
     st.session_state.needs_reinitialization = True # Force agent re-init for new chat
     st.session_state.pending_action = None
@@ -180,14 +191,14 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # --- MODIFIED: Conversation Selector to display names and handle switching ---
+    # --- MODIFIED: Conversation Selector to display names ---
     chat_names = [conv['name'] for conv in st.session_state.all_conversations]
     
-    # Ensure index is valid, especially on first load or after adding a new chat
-    current_idx_for_selectbox = st.session_state.current_conversation_index 
+    # Ensure index is valid, especially on first load
+    current_idx_for_selectbox = st.session_state.current_conversation_index if st.session_state.current_conversation_index >= 0 else 0
     
-    # Use a unique key for the selectbox to prevent Streamlit errors if options change frequently
-    selector_key = f"chat_selector_{len(st.session_state.all_conversations)}" 
+    # Use a dummy key if chat_options is empty to avoid Streamlit errors on first run
+    selector_key = "chat_selector" if chat_names else "chat_selector_empty"
 
     selected_chat_label = st.selectbox(
         "Select Conversation", 
@@ -200,15 +211,16 @@ with st.sidebar:
     if selected_chat_label and chat_names: # Ensure chat_names is not empty
         new_index = chat_names.index(selected_chat_label)
         if new_index != st.session_state.current_conversation_index:
-            # The current conversation's state is implicitly saved because st.session_state.messages
-            # is a live reference to the list within st.session_state.all_conversations.
-            
+            # The current conversation is already saved by reference
+
+            # Update to the newly selected conversation index
             st.session_state.current_conversation_index = new_index
             st.session_state.messages = st.session_state.all_conversations[new_index]['messages'] # Update the messages pointer
 
-            st.session_state.needs_reinitialization = True # Force agent re-initialization with the new chat's history
+            # Force agent re-initialization with the history of the selected chat
+            st.session_state.needs_reinitialization = True
             
-            # Reset any pending HIL states for a clean transition to a different chat context
+            # Reset any pending HIL states for a clean transition
             st.session_state.pending_action = None
             st.session_state.pending_final_answer = None
             st.session_state.agent_continuation_needed = False
@@ -232,7 +244,6 @@ with st.sidebar:
     st.markdown("Developed with Streamlit and LangChain.")
 
 # --- Display Chat Messages ---
-# This loop iterates through the messages of the *currently active* conversation.
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if isinstance(message["content"], dict):
@@ -245,6 +256,7 @@ for message in st.session_state.messages:
                     if x_label and y_label and x_label in df.columns and y_label in df.columns:
                         st.line_chart(df, x=x_label, y=y_label, use_container_width=True)
                     else:
+                        # Dynamically select x and y columns if not specified
                         if len(df.columns) >= 2:
                             x_col, y_col = df.columns[0], df.columns[1]
                             st.line_chart(df, x=x_col, y=y_col, use_container_width=True)
@@ -268,12 +280,13 @@ for message in st.session_state.messages:
                         file_name=message["content"].get("file_name", "download.bin"),
                         mime=message["content"].get("mime", "application/octet-stream")
                     )
-            # --- Code execution messages are now handled here for persistence ---
+            # --- NEW: Handle code execution messages to show code persistently ---
             elif message["content"].get("type") == "code_execution":
                 st.markdown("**Agent proposed code:**")
                 st.code(message["content"]["code"], language="python")
                 st.markdown("**Code Execution Result:**")
                 st.code(message["content"]["output"], language="bash") # Use bash for generic output/error, or 'text'
+            # --- END NEW ---
             
             elif "content_text" in message["content"]:
                 st.markdown(message["content"]["content_text"])
@@ -281,11 +294,11 @@ for message in st.session_state.messages:
             st.markdown(message["content"])
 
 # --- Human-in-the-Loop (HIL) Section for Code Execution ---
-# This section only appears when the agent proposes code and waits for approval.
 if st.session_state.pending_action:
     with st.chat_message("assistant"):
         proposed_code = st.session_state.pending_action["tool_input"]
 
+        # Display the proposed code as the agent actually sent it (before _clean_code)
         st.warning("The agent proposes to execute the following Python code:")
         st.code(proposed_code, language="python")
         
@@ -294,21 +307,19 @@ if st.session_state.pending_action:
             if st.button("Approve & Execute Code", key="approve_code"):
                 with st.spinner("Executing proposed code..."):
                     execution_result = st.session_state.python_executor_tool.execute_code_after_approval(
-                        proposed_code
+                        proposed_code # Pass the raw proposed code for cleaning within the executor
                     )
                 
-                # --- MODIFIED: Store code and result in a structured message for persistent display ---
+                # --- MODIFIED: Store code and result in a structured message ---
                 code_execution_message = {
                     "role": "assistant",
                     "content": {
                         "type": "code_execution",
-                        "code": proposed_code,
+                        "code": proposed_code, # Display the originally proposed code
                         "output": execution_result
                     }
                 }
-                # Append this structured message to the current conversation's messages
-                # This ensures the code and output remain visible after execution.
-                # The check prevents redundant appending on reruns triggered by other Streamlit events.
+                # Check if the last message is identical to avoid duplication on rerun
                 if not (st.session_state.messages and 
                         isinstance(st.session_state.messages[-1]["content"], dict) and 
                         st.session_state.messages[-1]["content"].get("type") == "code_execution" and
@@ -316,8 +327,6 @@ if st.session_state.pending_action:
                         st.session_state.messages[-1]["content"].get("output") == execution_result):
                     st.session_state.messages.append(code_execution_message)
                 else:
-                    # If the message is already there (e.g. from an F5 refresh when this was the last action),
-                    # just give a small info message to the user for clarity.
                     st.info("Code executed. Result is identical to previous output and already displayed above.")
                 # --- END MODIFIED ---
                 
@@ -330,19 +339,40 @@ if st.session_state.pending_action:
                 st.session_state.last_generated_plot_file = None
 
                 # --- Process Output for PLOT_DATA_JSON_START ---
-                # This logic checks the execution_result string for plot data or file creation.
-                # It remains largely the same as before.
                 plot_data_match = re.search(r"PLOT_DATA_JSON_START:(.*):PLOT_DATA_JSON_END", execution_result, re.DOTALL)
                 if plot_data_match:
                     try:
                         plot_data_json = plot_data_match.group(1).strip()
                         parsed_plot_data = json.loads(plot_data_json)
-                        # ... (rest of plot data parsing and chart_data population) ...
-                        df_chart = pd.DataFrame(parsed_plot_data)
-                        chart_title = "Generated Chart" # Simplified title logic for brevity here
-                        x_label_key = df_chart.columns[0] if len(df_chart.columns) > 0 else None
-                        y_label_key = df_chart.columns[1] if len(df_chart.columns) > 1 else None
+                        
+                        # Validate JSON structure
+                        if not isinstance(parsed_plot_data, dict) or len(parsed_plot_data) < 2:
+                            # Allow single column if it's explicitly a list or dictionary of lists
+                            if not (isinstance(parsed_plot_data, dict) and all(isinstance(v, list) for v in parsed_plot_data.values())):
+                                raise ValueError("Plot data must be a dictionary with at least two keys (columns) for line chart or valid list structure.")
 
+                        df_chart = pd.DataFrame(parsed_plot_data)
+                        
+                        chart_title = "Generated Chart"
+                        if st.session_state.last_agent_action_log_entry:
+                            # Extract thought from the log entry that led to this action
+                            thought_match = re.search(r"Thought:\s*(.*?)(?=\nAction:)", st.session_state.last_agent_action_log_entry, re.DOTALL)
+                            if thought_match:
+                                thought_text = thought_match.group(1).strip()
+                                # Try to extract a sensible title from the thought
+                                thought_title_match = re.search(r"(?:plot|chart|visualize|growth of|trend of)\s+(.*?)(?:\.|,|\n|$)", thought_text, re.IGNORECASE)
+                                if thought_title_match:
+                                    extracted_title = thought_title_match.group(1).strip()
+                                    chart_title = extracted_title.capitalize() if extracted_title else chart_title
+                                    chart_title = re.sub(r"^(?:the\s)?(.*?)(?:\s+using.*|\s+for.*|\s+and.*|\s+of.*)?$", r"\1", chart_title, flags=re.IGNORECASE).strip()
+
+                        # Determine x and y labels for charting
+                        x_label_key = None
+                        y_label_key = None
+                        if len(df_chart.columns) >= 2:
+                            x_label_key = df_chart.columns[0]
+                            y_label_key = df_chart.columns[1]
+                        
                         st.session_state.last_generated_chart_data = {
                             "type": "chart",
                             "data": df_chart,
@@ -350,6 +380,7 @@ if st.session_state.pending_action:
                             "x_label": x_label_key,
                             "y_label": y_label_key
                         }
+                        # Remove the JSON string from the execution result for cleaner display
                         execution_result = execution_result.replace(f"PLOT_DATA_JSON_START:{plot_data_json}:PLOT_DATA_JSON_END", "").strip()
 
                     except (json.JSONDecodeError, ValueError) as e:
@@ -359,14 +390,16 @@ if st.session_state.pending_action:
                     st.session_state.last_generated_chart_data = None
 
                 # --- Process Output for Generated Plot FILES ---
-                # This also remains largely the same.
                 file_creation_match = re.search(r"Files created during execution: (.*)", execution_result, re.DOTALL)
                 detected_filenames = []
                 if file_creation_match:
                     detected_filenames_str = file_creation_match.group(1)
                     detected_filenames = [f.strip() for f in detected_filenames_str.split(',')]
                     execution_result = execution_result.replace(f"Files created during execution: {detected_filenames_str}", "").strip()
+                else:
                 
+                    pass 
+                # Display detected files
                 for filename in detected_filenames:
                     file_path = Path(filename)
                     if file_path.is_file():
@@ -390,9 +423,17 @@ if st.session_state.pending_action:
                                 "file_name": filename,
                                 "mime": mime_type
                             }
+                            # Only store the last image/plot file for re-display with final answer
                             if file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif']:
                                 st.session_state.last_generated_plot_file = file_display_entry
                             else:
+                                # For other file types, display immediately in the chat
+                                # Avoid duplicating if it was already part of code_execution_message.
+                                # For simplicity, only append if not already part of code_execution.
+                                # This append logic for files outside of code_execution_message is mostly for when agent
+                                # creates a file without explicit print, or if file detection is separated.
+                                # Given the new code_execution_message, this might be slightly redundant for some files
+                                # but harmless.
                                 st.session_state.messages.append({"role": "assistant", "content": file_display_entry})
                                 
                         except Exception as e:
@@ -418,12 +459,10 @@ if st.session_state.pending_action:
                 st.rerun()
 
 # --- Handle Task Completed interception ---
-# This section executes when the agent signals completion via TaskCompletedTool.
 if st.session_state.pending_final_answer:
     with st.chat_message("assistant"):
         st.success("Task Completed!")
         
-        # Display charts/files associated with the final answer
         if st.session_state.last_generated_chart_data:
             with st.container():
                 st.markdown("---")
@@ -431,8 +470,8 @@ if st.session_state.pending_final_answer:
                 st.subheader(chart_msg_content.get("title", "Generated Chart"))
                 try:
                     df = chart_msg_content["data"]
-                    x_label = chart_msg_content.get("x_label")
-                    y_label = chart_msg_content.get("y_label")
+                    x_label = chart_msg_content.get("x_label") # Corrected from message["content"]
+                    y_label = chart_msg_content.get("y_label") # Corrected from message["content"]
                     if x_label and y_label and x_label in df.columns and y_label in df.columns:
                         st.line_chart(df, x=x_label, y=y_label, use_container_width=True)
                     else:
@@ -461,7 +500,6 @@ if st.session_state.pending_final_answer:
                 st.caption("Generated visualization. AI models can make mistakes. Always check original sources.")
                 st.markdown("---")
 
-        # Display the final answer text
         if isinstance(st.session_state.pending_final_answer, dict) and "content_text" in st.session_state.pending_final_answer:
             st.markdown(st.session_state.pending_final_answer["content_text"])
             st.session_state.messages.append({"role": "assistant", "content": st.session_state.pending_final_answer["content_text"]})
@@ -469,12 +507,10 @@ if st.session_state.pending_final_answer:
             st.markdown(st.session_state.pending_final_answer)
             st.session_state.messages.append({"role": "assistant", "content": st.session_state.pending_final_answer})
 
-        # Optionally show agent's final thought process
         if st.session_state.last_agent_action_log_entry:
             with st.expander("Agent's Thought Process (Final Step)"):
                 st.code(st.session_state.last_agent_action_log_entry, language='ansi')
 
-        # Reset states for the next user interaction
         st.session_state.pending_final_answer = None
         st.session_state.agent_continuation_needed = False
         st.session_state.last_user_prompt = None
@@ -485,17 +521,14 @@ if st.session_state.pending_final_answer:
         st.session_state.last_generated_chart_data = None
         st.session_state.last_generated_plot_file = None
         st.session_state.execution_count = 0
-        st.rerun() # Rerun to clear the pending_final_answer UI elements
 
 # --- Agent Invocation Logic ---
-# This block runs the agent if there's a new user prompt or the agent needs to continue a task.
 if (st.session_state.agent_continuation_needed or st.session_state.get("last_user_prompt")) and \
    not st.session_state.pending_action and not st.session_state.pending_final_answer:
     
     agent_input = None
 
     if st.session_state.agent_continuation_needed:
-        # Agent is continuing a multi-step task, append observation to scratchpad
         base_scratchpad = st.session_state.last_agent_action_log_entry if st.session_state.last_agent_action_log_entry else ""
         current_observation = st.session_state.last_processed_observation
         agent_input = {
@@ -503,17 +536,16 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
             "agent_scratchpad": base_scratchpad + f"\nObservation: {current_observation}"
         }
         
-        st.session_state.agent_continuation_needed = False # Reset flag for current turn
+        st.session_state.agent_continuation_needed = False
         st.session_state.last_processed_observation = None
         st.session_state.last_agent_action_log_entry = None
         
-        # --- MODIFIED COMPLETION LOGIC (Fallback) ---
-        # This auto-completion is a fallback if the agent doesn't explicitly call task_completed.
-        # It's here to prevent the UI from getting stuck if the agent concludes without calling the tool.
+        # --- MODIFIED COMPLETION LOGIC ---
+        # This auto-completion is a fallback; agent should ideally call task_completed
         if "Standard Output:" in current_observation and "Standard Error:" not in current_observation:
             raw_output = current_observation.replace("Standard Output:", "").strip()
             
-            # Auto-complete if it's a short interaction (single execution) or many executions (potential loop)
+            # Auto-complete if it's a short interaction or many executions
             if st.session_state.current_agent_chain_user_prompt and (st.session_state.execution_count == 1 or st.session_state.execution_count > 5):
                 final_answer_text = f"Task completed based on code execution. The output is: {raw_output}"
                 
@@ -525,21 +557,20 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                     final_answer_text += f"\n\nA plot saved as '{file_name_for_final}' has been displayed above."
                 
                 st.session_state.pending_final_answer = {"type": "final_answer_auto_completed", "content_text": final_answer_text}
-                st.rerun() # Trigger a rerun to display the final answer
+                st.rerun()
         
     elif st.session_state.get("last_user_prompt"):
-        # New user prompt, start a new agent invocation chain
         agent_input = {"input": st.session_state.last_user_prompt}
-        st.session_state.current_agent_chain_user_prompt = st.session_state.last_user_prompt # Store original prompt for chain
-        st.session_state.last_user_prompt = None # Clear for next turn
-        st.session_state.execution_count = 0 # Reset execution counter for new task
+        st.session_state.current_agent_chain_user_prompt = st.session_state.last_user_prompt
+        st.session_state.last_user_prompt = None
+        st.session_state.execution_count = 0
 
-    if agent_input: # Only invoke if there's valid input for the agent
+    if agent_input:
         with st.chat_message("assistant"):
-            thought_process_placeholder = st.empty() # Placeholder for agent's thinking logs
+            thought_process_placeholder = st.empty()
 
             try:
-                st.session_state.callback_logs_buffer.seek(0) # Clear previous logs
+                st.session_state.callback_logs_buffer.seek(0)
                 st.session_state.callback_logs_buffer.truncate(0)
 
                 with st.spinner("Agent is thinking..."):
@@ -549,13 +580,12 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 captured_logs = st.session_state.callback_logs_buffer.getvalue()
 
                 with thought_process_placeholder.expander("Agent's Thought Process"):
-                    st.code(captured_logs, language='ansi') # Display agent's raw thoughts
+                    st.code(captured_logs, language='ansi')
 
-                st.markdown(f"**Agent's Final Response:** {agent_output}") # Display final human-readable output from agent
-                st.session_state.messages.append({"role": "assistant", "content": agent_output}) # Add to chat history
+                st.markdown(f"**Agent's Final Response:** {agent_output}")
+                st.session_state.messages.append({"role": "assistant", "content": agent_output})
 
 
-                # --- Process any files mentioned in agent_output for display/download ---
                 file_matches = re.findall(r"Files created during execution: (.*)", agent_output, re.DOTALL)
                 
                 if file_matches:
@@ -569,7 +599,7 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                                 with open(file_path, "rb") as f:
                                     file_bytes = f.read()
                                 
-                                mime_type = "application/octet-stream" # Default MIME type
+                                mime_type = "application/octet-stream"
                                 if file_path.suffix.lower() == ".gif":
                                     mime_type = "image/gif"
                                 elif file_path.suffix.lower() == ".png":
@@ -589,36 +619,33 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                                     "file_name": filename,
                                     "mime": mime_type
                                 }
-                                # Store for potential re-display with final answer, or display immediately
-                                if file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif']:
-                                    st.session_state.last_generated_plot_file = file_display_data
-                                else:
-                                    st.session_state.messages.append({"role": "assistant", "content": file_display_data})
+                                # This display is duplicated if the file was already caught by HIL and stored in last_generated_plot_file
+                                # It's better to rely on `last_generated_plot_file` for final display.
+                                # Removing this append might be cleaner, but keeping for now as it handles non-image files not picked up by plot_file state.
+                                st.session_state.messages.append({"role": "assistant", "content": file_display_data})
                                 
                             except Exception as file_display_e:
                                 st.warning(f"Could not load or display file {filename}: {file_display_e}")
                         else:
                             st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
                 
-                # Reset flags after successful agent turn
                 st.session_state.last_user_prompt = None
                 st.session_state.agent_continuation_needed = False
                 st.session_state.current_agent_chain_user_prompt = None
                 st.session_state.last_agent_action_log_entry = None
 
             except InterceptToolCall:
-                pass # This is expected when agent proposes code or task completed
+                pass
             except Exception as e:
-                # --- General Error Handling for Agent Execution ---
+                # Ensure stdout is restored even if an error occurs
                 if sys.stdout != st.session_state.callback_handler._original_stdout:
-                    sys.stdout = st.session_state.callback_handler._original_stdout # Ensure stdout is restored
+                    sys.stdout = st.session_state.callback_handler._original_stdout
 
                 captured_logs = st.session_state.callback_logs_buffer.getvalue()
 
                 error_message_str = str(e)
                 display_error_message = f"An unexpected error occurred during agent execution: {error_message_str}"
                 
-                # Provide more user-friendly messages for common errors
                 if "ConnectionError" in error_message_str or "ConnectError" in error_message_str:
                     display_error_message = "Connection Error: Could not reach the Groq API. Please check your internet connection and Groq's service status."
                 elif "401" in error_message_str or "Unauthorized" in error_message_str:
@@ -633,19 +660,14 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                     display_error_message = f"Agent Parsing Error: The agent's output did not conform to the expected format. This can sometimes be resolved by regenerating the response. Details: {e}"
                 elif "langchain_core.exceptions.OutputParserException" in error_message_str:
                     display_error_message = f"Agent Output Parsing Error: The agent's output could not be parsed according to ReAct format. This indicates the LLM deviated from the prompt. Try asking the question again or starting a new chat. Details: {e}"
-                elif "Input to PromptTemplate is missing variables" in error_message_str: # Catch the specific prompt error
-                    display_error_message = f"Prompt Template Error: The agent's output included unescaped curly braces in its internal thought. This is an internal issue; please try again or reset the chat. Details: {e}"
 
-
-                st.error(display_error_message) # Display error to user
+                st.error(display_error_message)
 
                 with thought_process_placeholder.expander("Agent's Process before error"):
-                    st.code(captured_logs, language='ansi') # Show agent's thought leading to error
+                    st.code(captured_logs, language='ansi')
                 
-                # Log the error message in the chat history
                 st.session_state.messages.append({"role": "assistant", "content": f"**Error:** {display_error_message}\n\n**Agent's Process:**\n```ansi\n{captured_logs}\n```"})
                 
-                # Reset agent state after an error to avoid getting stuck
                 st.session_state.needs_reinitialization = True
                 st.session_state.pending_action = None
                 st.session_state.pending_final_answer = None
@@ -656,10 +678,9 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 st.session_state.execution_count = 0
                 
                 st.session_state.messages.append({"role": "assistant", "content": "*(Agent session reset due to error. Please start a new conversation using 'New Chat' button.)*"})
-                st.rerun() # Rerun to reflect the error state and reset button
+                st.rerun()
 
 # --- Chat Input ---
-# This input field is displayed only when the agent is not busy and no HIL is pending.
 if not st.session_state.pending_action and \
    not st.session_state.agent_continuation_needed and \
    not st.session_state.pending_final_answer and \
@@ -670,10 +691,8 @@ if not st.session_state.pending_action and \
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         st.session_state.last_user_prompt = user_prompt
         # --- NEW: Update chat name on first user prompt in a 'New Chat' ---
-        # Get the current chat entry from the all_conversations list
         current_chat_entry = st.session_state.all_conversations[st.session_state.current_conversation_index]
-        # Only update the name if it's still the default "New Chat" name
-        if current_chat_entry['name'] == 'New Chat':
+        if current_chat_entry['name'] == 'New Chat': # Only update if it's the default name
             current_chat_entry['name'] = generate_chat_name(user_prompt)
         # --- END NEW ---
-        st.rerun() # Trigger a rerun to process the new user prompt
+        st.rerun()

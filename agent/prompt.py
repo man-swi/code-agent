@@ -56,11 +56,11 @@ CODE EXECUTION RULES (ABSOLUTELY CRITICAL - READ AND ADHERE):
         try:
             data = risky_function()
             print("Success!")
-        except SpecificError as {{e}}:
-            print(f"Failed: {{e}}")
+        except SpecificError as {{e}}: # <--- FIX: escaped 'e'
+            print(f"Failed: {{e}}") # <--- FIX: escaped 'e'
         ```
       - **Logical Comparisons**: When comparing values (e.g., execution times, numbers), ensure you are comparing two *distinct* variables or values (e.g., `if time1 < time2:`). Comparing a value to itself (e.g., `if var < var:`) is a logical error and will not yield meaningful results.
-      - **String Formatting**: When using f-strings, if your string contains single quotes internally (e.g., for dictionary keys like `data['key']`), enclose the entire f-string with **double quotes** to avoid `SyntaxError: unterminated string literal` (e.g., `print(f"The value is {{data['key']}}")`).
+      - **String Formatting**: When using f-strings, if your string contains single quotes internally (e.g., for dictionary keys like `data['key']`), enclose the entire f-string with **double quotes** to avoid `SyntaxError: unterminated string literal` (e.g., `print(f"The value is {{data['key']}}")`). # <--- FIX: escaped 'data['key']'
 4. **Visualization Data Generation (Prioritized for Simple Trends/Charts)**:
     - **You MUST use this method for ALL simple line or bar charts** with up to 2 dimensions (e.g., x-y data like time vs. value, or category vs. value).
     - Calculate the data points.

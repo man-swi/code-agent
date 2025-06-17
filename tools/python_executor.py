@@ -37,19 +37,20 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"^\s*```(?:python)?\s*$", re.IGNORECASE), # ```python or ```
             re.compile(r"^\s*```.*$", re.IGNORECASE),              # Any markdown fence with text (e.g. ```json, ```output)
             re.compile(r"^\s*\.\.\.\s*$", re.IGNORECASE),          # Ellipses line
-            re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before(?: I)? execution\.?|Please wait for the Observation\.|The agent proposes to execute the following Python code:|```python|```)\s*$", re.IGNORECASE),
-            re.compile(r"^\s*(?:Thought:.*|Action:.*|Action Input:.*|Observation:.*)\s*$", re.IGNORECASE), # ReAct internal thoughts/actions
+            re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before(?: I)? execution\.?|Please wait for the Observation\.|The agent proposes to execute the following Python code:|```python|```|Thought:|Action:|Action Input:|Observation:)\s*$", re.IGNORECASE),
             re.compile(r"^\s*```.*?$", re.IGNORECASE), # General catch-all for markdown fences like ````python`
             re.compile(r"^\s*python\s*$", re.IGNORECASE), # Just the word 'python'
             re.compile(r"^\s*```\s*$", re.IGNORECASE), # Ensure empty code fences are caught
             re.compile(r"^\s*Please confirm the code before I execute it\.\s*$", re.IGNORECASE), # Specific pattern from your video
             re.compile(r"^\s*```python\s*$", re.IGNORECASE), # Specific pattern for python code blocks
+            re.compile(r"^\s*(?:print\s*\(\s*['\"](?:Executing|Running|Proposed|Confirming|Please confirm|The agent proposes).*['\"]\s*\))\s*$", re.IGNORECASE), # Catches agent printing conversational text
         ]
         # --- END MODIFIED ---
         
         INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
         # --- MODIFIED: More comprehensive CONVERSATIONAL_IN_LINE_PATTERNS ---
+        # These patterns are to clean up partial conversational text from lines that might also contain code.
         CONVERSATIONAL_IN_LINE_PATTERNS = [
             re.compile(r"Please confirm the code before(?: I)? execution\.?", re.IGNORECASE),
             re.compile(r"execution\.?", re.IGNORECASE),
@@ -62,6 +63,7 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"\.\.\.", re.IGNORECASE),
             re.compile(r"The agent proposes to execute the following Python code:", re.IGNORECASE),
             re.compile(r"^\s*```\s*$", re.IGNORECASE),
+            re.compile(r"(?:print\s*\(\s*['\"](?:Executing|Running|Proposed|Confirming|Please confirm|The agent proposes).*['\"]\s*\))\s*$", re.IGNORECASE),
         ]
         # --- END MODIFIED ---
 
@@ -93,10 +95,12 @@ class PythonCodeExecutorTool(BaseTool):
             processed_line_content = processed_line.strip()
 
             if INPUT_CALL_PATTERN.search(processed_line_content):
-                # Ensure we only replace input() if it's a call, not just part of a string
-                if "input(" in processed_line_content and not (processed_line_content.count('"') % 2 == 0 and processed_line_content.count("'") % 2 == 0 and '"' in processed_line_content and "'" in processed_line_content):
-                    processed_line = processed_line.replace(processed_line_content, INPUT_CALL_PATTERN.sub("# Removed input() for safety, use hardcoded values #", processed_line_content))
-            
+                # Check for input() calls that are not inside a string literal.
+                # A robust check is complex, but a heuristic is to see if 'input(' is within a quoted string.
+                # Simplest for now: if 'input(' is found, comment out the line.
+                if "input(" in processed_line_content and not (('"' in processed_line_content and processed_line_content.count('"') % 2 == 0) or ("'" in processed_line_content and processed_line_content.count("'") % 2 == 0)):
+                    processed_line = "# Removed input() for safety: " + processed_line_content
+                
             # --- Apply NEW pre-processing replacements ---
             for pattern, replacement in REPLACEMENT_MAP.items():
                 if pattern.match(processed_line): # Use match for start of line
@@ -108,13 +112,13 @@ class PythonCodeExecutorTool(BaseTool):
                 # NEW: Clean up unmatched quotes or common trailing non-code text from the very end of lines
                 # Example: `print("Hello!") please confirm` -> `print("Hello!")`
                 # This regex removes " please confirm", " The agent proposes" etc. from the end of a line
-                processed_line = re.sub(r'["\']?\s*(?:Please confirm|The agent proposes|execution|Thought|Action|Observation|```|python|report).*$', '', processed_line.strip(), flags=re.IGNORECASE)
+                processed_line = re.sub(r'["\']?\s*(?:Please confirm|The agent proposes|execution|Thought|Action|Observation|```|python|report|Solution:|Let\'s try this:).*$', '', processed_line.strip(), flags=re.IGNORECASE)
                 
                 # Further attempt to fix f-string quoting issues. Best is to prompt the model.
                 # This is a very targeted fix for f-strings with nested quotes, but not perfect.
-                if re.search(r"f['\"].*?\{.*?['\"].*?\}.*?['\"]", processed_line) and processed_line.strip().startswith("f'") and "['" in processed_line:
-                    # If f-string starts with single quote but has inner single quotes, try to switch to double
-                    processed_line = processed_line.replace("f'", "f\"").replace("'", "\"")
+                # Revert specific fix to avoid unintended consequences, agent should handle it.
+                # if re.search(r"f['\"].*?\{.*?['\"].*?\}.*?['\"]", processed_line) and processed_line.strip().startswith("f'") and "['" in processed_line:
+                #     processed_line = processed_line.replace("f'", "f\"").replace("'", "\"")
                 
                 filtered_lines.append(processed_line)
         
@@ -125,6 +129,7 @@ class PythonCodeExecutorTool(BaseTool):
 
         try:
             autopep8_path = [sys.executable, "-m", "autopep8"]
+            # Check if autopep8 is installed first
             subprocess.run(autopep8_path + ["--version"], capture_output=True, check=True, text=True, timeout=5)
 
             process = subprocess.run(
@@ -145,6 +150,10 @@ class PythonCodeExecutorTool(BaseTool):
             return pre_formatted_code
         except subprocess.CalledProcessError as e:
             sys.stderr.write(f"Warning: autopep8 failed to format code (might be a critical syntax error): {e.stderr.strip()}. Using pre-formatted code.\n")
+            # If autopep8 returns a non-zero exit code but also prints code, use that.
+            # Otherwise, use the pre_formatted_code.
+            if e.stdout.strip(): # if there's some output, even if it's an error code
+                return "AUTOPEP8_FORMATTING_FAILED:" + e.stdout.strip()
             return "AUTOPEP8_FORMATTING_FAILED:" + pre_formatted_code
         except subprocess.TimeoutExpired:
             sys.stderr.write("Warning: autopep8 process timed out. Using pre-formatted code.\n")
@@ -154,12 +163,15 @@ class PythonCodeExecutorTool(BaseTool):
             return pre_formatted_code
 
     def _run(self, code: str) -> str:
+        # This _run method is mostly for internal LangChain validation and not directly used
+        # for execution after HIL. The actual execution happens via execute_code_after_approval.
+        # However, it still uses _clean_code.
         cleaned_code = self._clean_code(code)
         if cleaned_code.startswith("AUTOPEP8_FORMATTING_FAILED:"):
             return f"Error: Code formatting failed, likely due to severe syntax issues. Please review your code carefully.\n{cleaned_code.replace('AUTOPEP8_FORMATTING_FAILED:', '')}"
         if not cleaned_code:
             return "Error: No valid Python code provided after cleaning. The input might have been empty or only markdown."
-        return cleaned_code
+        return cleaned_code # Return the cleaned code for internal observation, if no execution happens.
 
     def execute_code_after_approval(self, raw_code_input: str) -> str:
         cleaned_code = self._clean_code(raw_code_input)
@@ -176,7 +188,7 @@ class PythonCodeExecutorTool(BaseTool):
                 capture_output=True,
                 text=True,
                 timeout=60,
-                check=False
+                check=False # Do not raise CalledProcessError here, capture stderr
             )
 
             output_parts = []
@@ -190,7 +202,7 @@ class PythonCodeExecutorTool(BaseTool):
                 if "NameError: name 'time' is not defined" in error_message or "NameError: name 'plt' is not defined" in error_message or "NameError: name 'pd' is not defined" in error_message or "NameError: name 'np' is not defined" in error_message:
                     output_parts.append("\n**HINT:** This looks like a missing import. Remember to include `import time`, `import matplotlib.pyplot as plt`, `import pandas as pd`, `import numpy as np`, etc., at the beginning of your script if you're using functions or objects from those libraries.")
                 elif "SyntaxError:" in error_message or "IndentationError:" in error_message:
-                    output_parts.append("\n**HINT:** This is a syntax or indentation error. Review the line indicated in the traceback for missing colons, unbalanced parentheses, unmatched quotes, or incorrect indentation.")
+                    output_parts.append("\n**HINT:** This is a syntax or indentation error. Review the line indicated in the traceback for missing colons, unbalanced parentheses, unmatched quotes, or incorrect indentation. Ensure there's no conversational text mixed with code.")
                 elif "ValueError: Input 0 of layer" in error_message and "is incompatible" in error_message:
                     output_parts.append("\n**HINT:** For Keras Sequential models, the first layer usually needs an `input_shape` argument (e.g., `model.add(Dense(..., input_shape=(num_features,)))`).")
                 elif "TypeError: object is not subscriptable" in error_message:
@@ -199,6 +211,8 @@ class PythonCodeExecutorTool(BaseTool):
                      output_parts.append("\n**HINT:** The code timed out. This often happens due to an infinite loop or an `input()` call (which is disallowed). Ensure your loops have termination conditions and you are not using `input()`.")
                 elif "NameError:" in error_message or "ImportError:" in error_message:
                      output_parts.append("\n**HINT:** This might be a missing import or an undefined variable. Double-check your your imports and variable names.")
+                elif "unmatched" in error_message and ("'" in error_message or '"' in error_message or '(' in error_message or '[' in error_message or '{' in error_message):
+                    output_parts.append("\n**HINT:** This indicates an unmatched quote, parenthesis, bracket, or brace. Carefully check your string literals and nested expressions.")
                 # --- End ENHANCED ---
 
             result_message = "\n".join(output_parts)

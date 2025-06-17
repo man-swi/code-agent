@@ -19,7 +19,8 @@ from tools.task_completed import TaskCompletedTool
 from langchain_core.messages import HumanMessage, AIMessage
 
 # NEW: Import generate_chat_name from chat_utils
-from chat_utils import generate_chat_name
+# In custom_code_agent.py, line 22
+from utils.chat_utils import generate_chat_name
 
 # Load environment variables
 from dotenv import load_dotenv

@@ -29,6 +29,10 @@ class PythonCodeExecutorTool(BaseTool):
         `input()` calls, and applies automated code formatting using autopep8 as a final guardrail
         for consistent Python syntax and indentation.
         """
+        # --- NEW/MODIFIED: More aggressive initial stripping and filtering ---
+        # Remove common leading conversational phrases or markdown markers from the start of the whole input
+        code_input = re.sub(r"^\s*(?:```(?:python)?\s*|Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before(?: I)? execution\.?|The agent proposes to execute the following Python code:|Action Input:)\s*", "", code_input, flags=re.IGNORECASE).strip()
+        
         lines = code_input.split('\n')
         filtered_lines = []
         
@@ -44,6 +48,9 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"^\s*Please confirm the code before I execute it\.\s*$", re.IGNORECASE), # Specific pattern from your video
             re.compile(r"^\s*```python\s*$", re.IGNORECASE), # Specific pattern for python code blocks
             re.compile(r"^\s*(?:print\s*\(\s*['\"](?:Executing|Running|Proposed|Confirming|Please confirm|The agent proposes).*['\"]\s*\))\s*$", re.IGNORECASE), # Catches agent printing conversational text
+            re.compile(r"^\s*Action\s*:\s*python_code_executor\s*$", re.IGNORECASE), # Explicitly remove `Action: python_code_executor` if it's its own line
+            re.compile(r"^\s*Action Input\s*:\s*$", re.IGNORECASE), # Explicitly remove `Action Input:` if it's its own line
+            re.compile(r"^\s*Thought\s*:\s*.*$", re.IGNORECASE), # Explicitly remove Thought: lines
         ]
         # --- END MODIFIED ---
         
@@ -64,6 +71,9 @@ class PythonCodeExecutorTool(BaseTool):
             re.compile(r"The agent proposes to execute the following Python code:", re.IGNORECASE),
             re.compile(r"^\s*```\s*$", re.IGNORECASE),
             re.compile(r"(?:print\s*\(\s*['\"](?:Executing|Running|Proposed|Confirming|Please confirm|The agent proposes).*['\"]\s*\))\s*$", re.IGNORECASE),
+            re.compile(r"Action\s*:\s*python_code_executor", re.IGNORECASE),
+            re.compile(r"Action Input\s*:", re.IGNORECASE),
+            re.compile(r"Thought\s*:", re.IGNORECASE),
         ]
         # --- END MODIFIED ---
 
@@ -108,22 +118,17 @@ class PythonCodeExecutorTool(BaseTool):
                     break # Apply only one matching rule per line
             # --- End NEW ---
 
-            if processed_line.strip():
+            if processed_line.strip(): # Only add non-empty lines after processing
                 # NEW: Clean up unmatched quotes or common trailing non-code text from the very end of lines
                 # Example: `print("Hello!") please confirm` -> `print("Hello!")`
                 # This regex removes " please confirm", " The agent proposes" etc. from the end of a line
                 processed_line = re.sub(r'["\']?\s*(?:Please confirm|The agent proposes|execution|Thought|Action|Observation|```|python|report|Solution:|Let\'s try this:).*$', '', processed_line.strip(), flags=re.IGNORECASE)
                 
-                # Further attempt to fix f-string quoting issues. Best is to prompt the model.
-                # This is a very targeted fix for f-strings with nested quotes, but not perfect.
-                # Revert specific fix to avoid unintended consequences, agent should handle it.
-                # if re.search(r"f['\"].*?\{.*?['\"].*?\}.*?['\"]", processed_line) and processed_line.strip().startswith("f'") and "['" in processed_line:
-                #     processed_line = processed_line.replace("f'", "f\"").replace("'", "\"")
-                
                 filtered_lines.append(processed_line)
         
         pre_formatted_code = "\n".join(filtered_lines).strip()
 
+        # If after all cleaning, the code is empty or only whitespace, return empty string
         if not pre_formatted_code:
             return ""
 
@@ -152,7 +157,7 @@ class PythonCodeExecutorTool(BaseTool):
             sys.stderr.write(f"Warning: autopep8 failed to format code (might be a critical syntax error): {e.stderr.strip()}. Using pre-formatted code.\n")
             # If autopep8 returns a non-zero exit code but also prints code, use that.
             # Otherwise, use the pre_formatted_code.
-            if e.stdout.strip(): # if there's some output, even if it's an error code
+            if e.stdout.strip(): # if there's some output, even if it's an an error message like "E901 IndentationError"
                 return "AUTOPEP8_FORMATTING_FAILED:" + e.stdout.strip()
             return "AUTOPEP8_FORMATTING_FAILED:" + pre_formatted_code
         except subprocess.TimeoutExpired:
@@ -175,6 +180,11 @@ class PythonCodeExecutorTool(BaseTool):
 
     def execute_code_after_approval(self, raw_code_input: str) -> str:
         cleaned_code = self._clean_code(raw_code_input)
+        
+        # --- NEW: DEBUGGING PRINT. This will show you exactly what is being executed. ---
+        print(f"\n--- DEBUG: Cleaned Code for Execution ---\n{cleaned_code}\n--- END DEBUG ---\n", file=sys.stderr)
+        # --- END DEBUGGING PRINT ---
+
         if cleaned_code.startswith("AUTOPEP8_FORMATTING_FAILED:"):
             return f"Error: Code formatting failed, likely due to severe syntax issues. Please review your code carefully.\n{cleaned_code.replace('AUTOPEP8_FORMATTING_FAILED:', '')}"
         if not cleaned_code:

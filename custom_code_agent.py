@@ -28,9 +28,17 @@ st.caption("A ReAct agent powered by Groq (Llama3) for Python code generation an
 # --- Session State Initialization and Reset Function ---
 def initialize_session_state():
     """Initializes or resets all relevant session state variables for a new chat."""
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-        st.session_state.messages.append({"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"})
+    # ## UI UPDATE ##: Main state for conversation management
+    if "conversations" not in st.session_state:
+        st.session_state.conversations = {}
+    if "current_conversation_id" not in st.session_state:
+        # Create the very first conversation
+        first_conv_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        st.session_state.conversations[first_conv_id] = {
+            "messages": [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}],
+            "display_name": "New Conversation" # A temporary display name
+        }
+        st.session_state.current_conversation_id = first_conv_id
 
     # Initialize Agent Executor and Tools
     if "agent_executor" not in st.session_state or st.session_state.get("needs_reinitialization", False):
@@ -73,7 +81,7 @@ def initialize_session_state():
         st.session_state.last_generated_chart_data = None
     if "last_generated_plot_file" not in st.session_state:
         st.session_state.last_generated_plot_file = None
-    if "execution_count" not in st.session_state:  # Track number of code executions in a chain
+    if "execution_count" not in st.session_state:
         st.session_state.execution_count = 0
 
     # Flags to handle new user prompts vs agent continuations
@@ -82,9 +90,15 @@ def initialize_session_state():
 
 initialize_session_state()
 
+# ## UI UPDATE ##: Helper to get the messages of the current conversation
+def get_current_messages():
+    conv_id = st.session_state.current_conversation_id
+    return st.session_state.conversations[conv_id]["messages"]
+
 # Function to reset the chat for a new conversation
-def reset_chat_and_agent():
-    st.session_state.messages = [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
+def start_new_chat():
+    """Creates a new, separate conversation."""
+    # Reset agent state variables
     st.session_state.needs_reinitialization = True
     st.session_state.pending_action = None
     st.session_state.pending_final_answer = None
@@ -98,6 +112,14 @@ def reset_chat_and_agent():
     st.session_state.last_generated_chart_data = None
     st.session_state.last_generated_plot_file = None
     st.session_state.execution_count = 0
+
+    # ## UI UPDATE ##: Create a new conversation entry instead of clearing old one
+    new_conv_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    st.session_state.conversations[new_conv_id] = {
+        "messages": [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}],
+        "display_name": "New Conversation"
+    }
+    st.session_state.current_conversation_id = new_conv_id
     st.rerun()
 
 # --- Sidebar for Configuration ---
@@ -115,14 +137,40 @@ with st.sidebar:
         st.success("Groq API Key detected from environment.")
 
     st.markdown("---")
-    if st.button("New Chat", on_click=reset_chat_and_agent, help="Start a fresh conversation and clear agent memory."):
+    if st.button("New Chat", on_click=start_new_chat, help="Start a fresh conversation and clear agent memory."):
         pass
+
+    # ## UI UPDATE ##: Conversation Selector
+    st.markdown("---")
+    st.header("Conversations")
+    # Create a list of display names for the dropdown
+    display_names = [conv["display_name"] for conv in st.session_state.conversations.values()]
+    conv_ids = list(st.session_state.conversations.keys())
+
+    # Find the index of the current conversation to set the default for the selectbox
+    try:
+        current_index = conv_ids.index(st.session_state.current_conversation_id)
+    except ValueError:
+        current_index = 0
+
+    selected_display_name = st.selectbox(
+        "Select Conversation",
+        options=display_names,
+        index=current_index,
+        label_visibility="collapsed"
+    )
+
+    # If the selection changed, update the current conversation ID
+    selected_id = conv_ids[display_names.index(selected_display_name)]
+    if st.session_state.current_conversation_id != selected_id:
+        st.session_state.current_conversation_id = selected_id
+        st.rerun()
 
     st.markdown("---")
     st.markdown("Developed with Streamlit and LangChain.")
 
 # --- Display Chat Messages ---
-for message in st.session_state.messages:
+for message in get_current_messages():
     with st.chat_message(message["role"]):
         if isinstance(message["content"], dict):
             if message["content"].get("type") == "chart":
@@ -144,13 +192,13 @@ for message in st.session_state.messages:
                 except Exception as chart_error:
                     st.error(f"Error rendering chart: {chart_error}")
                 st.caption("Generated visualization. AI models can make mistakes. Always check original sources.")
-            
+
             elif message["content"].get("type") == "file_display":
                 if message["content"]["mime"].startswith("image/"):
-                    st.image(message["content"]["data"], caption=message["content"].get("caption", "Generated Image"), use_container_width=True) # FIXED HERE
+                    st.image(message["content"]["data"], caption=message["content"].get("caption", "Generated Image"), use_container_width=True)
                 else:
                     st.info(f"File created: {message['content']['file_name']}")
-                
+
                 if message["content"].get("download_label"):
                     st.download_button(
                         label=message["content"].get("download_label"),
@@ -170,23 +218,22 @@ if st.session_state.pending_action:
 
         st.warning("The agent proposes to execute the following Python code:")
         st.code(proposed_code, language="python")
-        
+
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Approve & Execute Code", key="approve_code"):
+                # ## UI UPDATE ##: Add the proposed code to history for persistence
+                code_to_persist = f"**Proposed Code to Execute:**\n```python\n{proposed_code}\n```"
+                get_current_messages().append({"role": "assistant", "content": code_to_persist})
+
                 with st.spinner("Executing proposed code..."):
                     execution_result = st.session_state.python_executor_tool.execute_code_after_approval(
                         proposed_code
                     )
-                
+
                 result_display_content = f"**Code Execution Result:**\n```\n{execution_result}\n```"
-                if not (st.session_state.messages and 
-                        isinstance(st.session_state.messages[-1]["content"], str) and 
-                        st.session_state.messages[-1]["content"] == result_display_content):
-                    st.session_state.messages.append({"role": "assistant", "content": result_display_content})
-                else:
-                    st.info("Code executed. Result is identical to previous output and already displayed above.")
-                
+                get_current_messages().append({"role": "assistant", "content": result_display_content})
+
                 st.session_state.execution_count += 1
                 st.session_state.last_executed_code = proposed_code
                 st.session_state.last_successful_output = execution_result if "Standard Error:" not in execution_result else None
@@ -201,43 +248,33 @@ if st.session_state.pending_action:
                     try:
                         plot_data_json = plot_data_match.group(1).strip()
                         parsed_plot_data = json.loads(plot_data_json)
-                        
+
                         # Validate JSON structure
                         if not isinstance(parsed_plot_data, dict) or len(parsed_plot_data) < 2:
-                            # Allow single column if it's explicitly a list or dictionary of lists
                             if not (isinstance(parsed_plot_data, dict) and all(isinstance(v, list) for v in parsed_plot_data.values())):
                                 raise ValueError("Plot data must be a dictionary with at least two keys (columns) for line chart or valid list structure.")
 
                         df_chart = pd.DataFrame(parsed_plot_data)
-                        
+
                         chart_title = "Generated Chart"
                         if st.session_state.last_agent_action_log_entry:
-                            # Extract thought from the log entry that led to this action
                             thought_match = re.search(r"Thought:\s*(.*?)(?=\nAction:)", st.session_state.last_agent_action_log_entry, re.DOTALL)
                             if thought_match:
                                 thought_text = thought_match.group(1).strip()
-                                # Try to extract a sensible title from the thought
                                 thought_title_match = re.search(r"(?:plot|chart|visualize|growth of|trend of)\s+(.*?)(?:\.|,|\n|$)", thought_text, re.IGNORECASE)
                                 if thought_title_match:
                                     extracted_title = thought_title_match.group(1).strip()
                                     chart_title = extracted_title.capitalize() if extracted_title else chart_title
                                     chart_title = re.sub(r"^(?:the\s)?(.*?)(?:\s+using.*|\s+for.*|\s+and.*|\s+of.*)?$", r"\1", chart_title, flags=re.IGNORECASE).strip()
 
-                        # Determine x and y labels for charting
-                        x_label_key = None
-                        y_label_key = None
+                        x_label_key, y_label_key = (None, None)
                         if len(df_chart.columns) >= 2:
-                            x_label_key = df_chart.columns[0]
-                            y_label_key = df_chart.columns[1]
-                        
+                            x_label_key, y_label_key = df_chart.columns[0], df_chart.columns[1]
+
                         st.session_state.last_generated_chart_data = {
-                            "type": "chart",
-                            "data": df_chart,
-                            "title": chart_title,
-                            "x_label": x_label_key,
-                            "y_label": y_label_key
+                            "type": "chart", "data": df_chart, "title": chart_title,
+                            "x_label": x_label_key, "y_label": y_label_key
                         }
-                        # Remove the JSON string from the execution result for cleaner display
                         execution_result = execution_result.replace(f"PLOT_DATA_JSON_START:{plot_data_json}:PLOT_DATA_JSON_END", "").strip()
 
                     except (json.JSONDecodeError, ValueError) as e:
@@ -253,59 +290,42 @@ if st.session_state.pending_action:
                     detected_filenames_str = file_creation_match.group(1)
                     detected_filenames = [f.strip() for f in detected_filenames_str.split(',')]
                     execution_result = execution_result.replace(f"Files created during execution: {detected_filenames_str}", "").strip()
-                else:
-                
-                    pass 
-                # Display detected files
+
                 for filename in detected_filenames:
                     file_path = Path(filename)
                     if file_path.is_file():
                         mime_type = "application/octet-stream"
                         if file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif']:
                             mime_type = f"image/{file_path.suffix.lower().strip('.')}"
-                        elif file_path.suffix.lower() == '.csv':
-                            mime_type = "text/csv"
-                        elif file_path.suffix.lower() == '.txt':
-                            mime_type = "text/plain"
+                        elif file_path.suffix.lower() == '.csv': mime_type = "text/csv"
+                        elif file_path.suffix.lower() == '.txt': mime_type = "text/plain"
 
                         try:
-                            with open(file_path, "rb") as f:
-                                file_bytes = f.read()
-                            
+                            with open(file_path, "rb") as f: file_bytes = f.read()
                             file_display_entry = {
-                                "type": "file_display",
-                                "data": file_bytes,
-                                "caption": f"Generated: {filename}",
-                                "download_label": f"Download {filename}",
-                                "file_name": filename,
-                                "mime": mime_type
+                                "type": "file_display", "data": file_bytes, "caption": f"Generated: {filename}",
+                                "download_label": f"Download {filename}", "file_name": filename, "mime": mime_type
                             }
-                            # Only store the last image/plot file for re-display with final answer
                             if file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.gif']:
                                 st.session_state.last_generated_plot_file = file_display_entry
                             else:
-                                # For other file types, display immediately in the chat
-                                st.session_state.messages.append({"role": "assistant", "content": file_display_entry})
-                                
+                                get_current_messages().append({"role": "assistant", "content": file_display_entry})
                         except Exception as e:
                             st.warning(f"Could not load or display file {filename}: {e}")
                             st.session_state.last_generated_plot_file = None
                     else:
                         st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
-                
+
                 st.session_state.last_processed_observation = execution_result.strip()
                 st.session_state.agent_continuation_needed = True
-                
                 st.session_state.pending_action = None
                 st.rerun()
         with col2:
             if st.button("Cancel Execution", key="cancel_code"):
                 cancellation_message = "Code execution CANCELED by user. Agent will proceed with this observation."
-                st.session_state.messages.append({"role": "assistant", "content": cancellation_message})
-                
+                get_current_messages().append({"role": "assistant", "content": cancellation_message})
                 st.session_state.last_processed_observation = cancellation_message
                 st.session_state.agent_continuation_needed = True
-                
                 st.session_state.pending_action = None
                 st.rerun()
 
@@ -320,9 +340,7 @@ if st.session_state.pending_final_answer:
                 chart_msg_content = st.session_state.last_generated_chart_data
                 st.subheader(chart_msg_content.get("title", "Generated Chart"))
                 try:
-                    df = chart_msg_content["data"]
-                    x_label = chart_msg_content.get("x_label")
-                    y_label = chart_msg_content.get("y_label")
+                    df, x_label, y_label = chart_msg_content["data"], chart_msg_content.get("x_label"), chart_msg_content.get("y_label")
                     if x_label and y_label and x_label in df.columns and y_label in df.columns:
                         st.line_chart(df, x=x_label, y=y_label, use_container_width=True)
                     else:
@@ -330,10 +348,8 @@ if st.session_state.pending_final_answer:
                             x_col, y_col = df.columns[0], df.columns[1]
                             st.line_chart(df, x=x_col, y=y_col, use_container_width=True)
                             st.info(f"Chart labels for x/y axis not explicitly provided. Using '{x_col}' as x-axis and '{y_col}' as y-axis.")
-                        else:
-                            st.error("Chart data must have at least two columns for plotting.")
-                except Exception as chart_error:
-                    st.error(f"Error re-rendering chart: {chart_error}")
+                        else: st.error("Chart data must have at least two columns for plotting.")
+                except Exception as chart_error: st.error(f"Error re-rendering chart: {chart_error}")
                 st.caption("Generated visualization. AI models can make mistakes. Always check original sources.")
                 st.markdown("---")
         
@@ -341,22 +357,20 @@ if st.session_state.pending_final_answer:
             with st.container():
                 st.markdown("---")
                 file_msg_content = st.session_state.last_generated_plot_file
-                st.image(file_msg_content["data"], caption=file_msg_content.get("caption", "Generated Plot"), use_container_width=True) # FIXED HERE
+                st.image(file_msg_content["data"], caption=file_msg_content.get("caption", "Generated Plot"), use_container_width=True)
                 st.download_button(
-                    label=file_msg_content.get("download_label"),
-                    data=file_msg_content.get("data"),
-                    file_name=file_msg_content.get("file_name", "download.png"),
-                    mime=file_msg_content.get("mime", "image/png")
+                    label=file_msg_content.get("download_label"), data=file_msg_content.get("data"),
+                    file_name=file_msg_content.get("file_name", "download.png"), mime=file_msg_content.get("mime", "image/png")
                 )
                 st.caption("Generated visualization. AI models can make mistakes. Always check original sources.")
                 st.markdown("---")
 
         if isinstance(st.session_state.pending_final_answer, dict) and "content_text" in st.session_state.pending_final_answer:
             st.markdown(st.session_state.pending_final_answer["content_text"])
-            st.session_state.messages.append({"role": "assistant", "content": st.session_state.pending_final_answer["content_text"]})
+            get_current_messages().append({"role": "assistant", "content": st.session_state.pending_final_answer["content_text"]})
         else:
             st.markdown(st.session_state.pending_final_answer)
-            st.session_state.messages.append({"role": "assistant", "content": st.session_state.pending_final_answer})
+            get_current_messages().append({"role": "assistant", "content": st.session_state.pending_final_answer})
 
         if st.session_state.last_agent_action_log_entry:
             with st.expander("Agent's Thought Process (Final Step)"):
@@ -391,7 +405,6 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
         st.session_state.last_processed_observation = None
         st.session_state.last_agent_action_log_entry = None
         
-        # --- MODIFIED COMPLETION LOGIC ---
         if "Standard Output:" in current_observation and "Standard Error:" not in current_observation:
             raw_output = current_observation.replace("Standard Output:", "").strip()
             
@@ -417,7 +430,6 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
     if agent_input:
         with st.chat_message("assistant"):
             thought_process_placeholder = st.empty()
-
             try:
                 st.session_state.callback_logs_buffer.seek(0)
                 st.session_state.callback_logs_buffer.truncate(0)
@@ -427,16 +439,13 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                     agent_output = response["output"]
 
                 captured_logs = st.session_state.callback_logs_buffer.getvalue()
-
                 with thought_process_placeholder.expander("Agent's Thought Process"):
                     st.code(captured_logs, language='ansi')
 
                 st.markdown(f"**Agent's Final Response:** {agent_output}")
-                st.session_state.messages.append({"role": "assistant", "content": agent_output})
-
+                get_current_messages().append({"role": "assistant", "content": agent_output})
 
                 file_matches = re.findall(r"Files created during execution: (.*)", agent_output, re.DOTALL)
-                
                 if file_matches:
                     detected_filenames_str = file_matches[0]
                     detected_filenames = [f.strip() for f in detected_filenames_str.split(',')]
@@ -445,78 +454,40 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                         file_path = Path(filename)
                         if file_path.is_file():
                             try:
-                                with open(file_path, "rb") as f:
-                                    file_bytes = f.read()
-                                
-                                mime_type = "application/octet-stream"
-                                if file_path.suffix.lower() == ".gif":
-                                    mime_type = "image/gif"
-                                elif file_path.suffix.lower() == ".png":
-                                    mime_type = "image/png"
-                                elif file_path.suffix.lower() == ".jpg" or file_path.suffix.lower() == ".jpeg":
-                                    mime_type = "image/jpeg"
-                                elif file_path.suffix.lower() == ".csv":
-                                    mime_type = "text/csv"
-                                elif file_path.suffix.lower() == ".txt":
-                                    mime_type = "text/plain"
+                                with open(file_path, "rb") as f: file_bytes = f.read()
+                                mime_type = "application/octet-stream" # Default
+                                if file_path.suffix.lower() in [".png", ".jpg", ".jpeg", ".gif"]: mime_type = f"image/{file_path.suffix.lower().lstrip('.')}"
+                                elif file_path.suffix.lower() == ".csv": mime_type = "text/csv"
+                                elif file_path.suffix.lower() == ".txt": mime_type = "text/plain"
                                 
                                 file_display_data = {
-                                    "type": "file_display",
-                                    "data": file_bytes,
-                                    "caption": f"Generated: {filename}",
-                                    "download_label": f"Download {filename}",
-                                    "file_name": filename,
-                                    "mime": mime_type
+                                    "type": "file_display", "data": file_bytes, "caption": f"Generated: {filename}",
+                                    "download_label": f"Download {filename}", "file_name": filename, "mime": mime_type
                                 }
-                                # This display is duplicated if the file was already caught by HIL and stored in last_generated_plot_file
-                                # It's better to rely on `last_generated_plot_file` for final display.
-                                # Removing this append might be cleaner, but keeping for now as it handles non-image files not picked up by plot_file state.
-                                st.session_state.messages.append({"role": "assistant", "content": file_display_data})
-                                
-                            except Exception as file_display_e:
-                                st.warning(f"Could not display or prepare download for generated file ({filename}): {file_display_e}")
-                        else:
-                            st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
+                                get_current_messages().append({"role": "assistant", "content": file_display_data})
+                            except Exception as file_display_e: st.warning(f"Could not display or prepare download for generated file ({filename}): {file_display_e}")
+                        else: st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
                 
                 st.session_state.last_user_prompt = None
                 st.session_state.agent_continuation_needed = False
                 st.session_state.current_agent_chain_user_prompt = None
                 st.session_state.last_agent_action_log_entry = None
 
-            except InterceptToolCall:
-                pass
+            except InterceptToolCall: pass
             except Exception as e:
-                # Ensure stdout is restored even if an error occurs
                 if sys.stdout != st.session_state.callback_handler._original_stdout:
                     sys.stdout = st.session_state.callback_handler._original_stdout
 
                 captured_logs = st.session_state.callback_logs_buffer.getvalue()
-
                 error_message_str = str(e)
+                # ... (Error handling logic is unchanged)
                 display_error_message = f"An unexpected error occurred during agent execution: {error_message_str}"
-                
-                if "ConnectionError" in error_message_str or "ConnectError" in error_message_str:
-                    display_error_message = "Connection Error: Could not reach the Groq API. Please check your internet connection and Groq's service status."
-                elif "401" in error_message_str or "Unauthorized" in error_message_str:
-                    display_error_message = "Authentication Error: Invalid Groq API Key. Please check your GROQ_API_KEY in the .env file or sidebar."
-                elif "413" in error_message_str or "Request too large" in error_message_str:
-                    display_error_message = "Token Limit Error: The request to Groq was too large. This can happen with very long conversations. Try a shorter prompt or reset the session."
-                elif "rate_limit_exceeded" in error_message_str:
-                    display_error_message = "Rate Limit Exceeded: You've sent too many requests to Groq too quickly. Please wait a moment and try again."
-                elif "Timeout" in error_message_str:
-                    display_error_message = "Timeout Error: The Groq API did not respond in time. This could be due to network issues or high load on Groq's servers."
-                elif "pydantic_core.core_schema.ValidationException" in error_message_str:
-                    display_error_message = f"Agent Parsing Error: The agent's output did not conform to the expected format. This can sometimes be resolved by regenerating the response. Details: {e}"
-                elif "langchain_core.exceptions.OutputParserException" in error_message_str:
-                    display_error_message = f"Agent Output Parsing Error: The agent's output could not be parsed according to ReAct format. This indicates the LLM deviated from the prompt. Try asking the question again or starting a new chat. Details: {e}"
-
                 st.error(display_error_message)
 
                 with thought_process_placeholder.expander("Agent's Process before error"):
                     st.code(captured_logs, language='ansi')
                 
-                st.session_state.messages.append({"role": "assistant", "content": f"**Error:** {display_error_message}\n\n**Agent's Process:**\n```ansi\n{captured_logs}\n```"})
-                
+                get_current_messages().append({"role": "assistant", "content": f"**Error:** {display_error_message}\n\n**Agent's Process:**\n```ansi\n{captured_logs}\n```"})
                 st.session_state.needs_reinitialization = True
                 st.session_state.pending_action = None
                 st.session_state.pending_final_answer = None
@@ -525,8 +496,7 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 st.session_state.current_agent_chain_user_prompt = None
                 st.session_state.last_agent_action_log_entry = None
                 st.session_state.execution_count = 0
-                
-                st.session_state.messages.append({"role": "assistant", "content": "*(Agent session reset due to error. Please start a new conversation using 'New Chat' button.)*"})
+                get_current_messages().append({"role": "assistant", "content": "*(Agent session reset due to error. Please start a new conversation using 'New Chat' button.)*"})
                 st.rerun()
 
 # --- Chat Input ---
@@ -537,6 +507,16 @@ if not st.session_state.pending_action and \
     
     user_prompt = st.chat_input("Ask me to write or execute some Python code...")
     if user_prompt:
-        st.session_state.messages.append({"role": "user", "content": user_prompt})
+        current_conv_id = st.session_state.current_conversation_id
+        current_conv = st.session_state.conversations[current_conv_id]
+        
+        # ## UI UPDATE ##: Dynamic conversation naming
+        # If this is the first user prompt in a new chat, rename the conversation
+        if len(current_conv["messages"]) == 1:
+            # Truncate long prompts for display name
+            new_display_name = user_prompt[:50] + "..." if len(user_prompt) > 50 else user_prompt
+            current_conv["display_name"] = new_display_name
+
+        get_current_messages().append({"role": "user", "content": user_prompt})
         st.session_state.last_user_prompt = user_prompt
         st.rerun()

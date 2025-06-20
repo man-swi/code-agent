@@ -1,7 +1,7 @@
 import sys
 import subprocess
 import os
-import re 
+import re
 from typing import Type
 
 from pydantic import BaseModel, Field
@@ -31,25 +31,27 @@ class PythonCodeExecutorTool(BaseTool):
         """
         lines = code_input.split('\n')
         filtered_lines = []
-        
-        # Patterns for lines to be completely removed (fences, conversational text)
+
+        # ## FIX ##: Made the regex pattern more flexible to catch more conversational phrases.
+        # This will now match "Please confirm the execution" and "Please confirm the code execution".
         NON_CODE_LINE_PATTERNS = [
             re.compile(r"^\s*```(?:python)?\s*$", re.IGNORECASE),
             re.compile(r"^\s*```$", re.IGNORECASE),
             re.compile(r"^\s*\.\.\.\s*$", re.IGNORECASE),
-            re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the code before execution\.?|Please wait for the Observation\.)\s*$", re.IGNORECASE),
+            re.compile(r"^\s*(?:Here is the code:|The code is as follows:|This is the Python code:|Please confirm the(?: code)? execution\.?|Please wait for the Observation\.)\s*$", re.IGNORECASE),
         ]
-        
+
         INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
+        # ## FIX ##: Also updated this pattern for consistency.
         CONVERSATIONAL_IN_LINE_PATTERNS = [
-            re.compile(r"Please confirm the code before execution\.?", re.IGNORECASE),
-            re.compile(r"execution\.?", re.IGNORECASE), 
+            re.compile(r"Please confirm the(?: code)? execution\.?", re.IGNORECASE),
+            re.compile(r"execution\.?", re.IGNORECASE),
             re.compile(r"Here is the code:", re.IGNORECASE),
             re.compile(r"The code is as follows:", re.IGNORECASE),
             re.compile(r"This is the Python code:", re.IGNORECASE),
             re.compile(r"Please wait for the Observation\.", re.IGNORECASE),
-            re.compile(r"```python", re.IGNORECASE), 
+            re.compile(r"```python", re.IGNORECASE),
             re.compile(r"```", re.IGNORECASE),
             re.compile(r"\.\.\.", re.IGNORECASE),
         ]
@@ -63,23 +65,23 @@ class PythonCodeExecutorTool(BaseTool):
                 if pattern.fullmatch(original_line_stripped):
                     is_non_code_line = True
                     break
-            
-            if is_non_code_line:
-                continue 
 
-            processed_line = line 
+            if is_non_code_line:
+                continue
+
+            processed_line = line
             for pattern in CONVERSATIONAL_IN_LINE_PATTERNS:
                 processed_line = pattern.sub("", processed_line)
-            
+
             processed_line_content = processed_line.strip()
 
             if INPUT_CALL_PATTERN.search(processed_line_content):
                 if "input(" in processed_line_content and not (processed_line_content.startswith(('"', "'")) and processed_line_content.endswith(('"', "'"))):
                     processed_line = processed_line.replace(processed_line_content, INPUT_CALL_PATTERN.sub("# Removed input() for safety, use hardcoded values #", processed_line_content))
-            
-            if processed_line.strip(): 
+
+            if processed_line.strip():
                 filtered_lines.append(processed_line)
-        
+
         pre_formatted_code = "\n".join(filtered_lines).strip()
 
         if not pre_formatted_code:
@@ -142,14 +144,14 @@ class PythonCodeExecutorTool(BaseTool):
                 output_parts.append(f"Standard Output:\n{process.stdout.strip()}")
             if process.stderr:
                 output_parts.append(f"Standard Error:\n{process.stderr.strip()}")
-            
+
             result_message = "\n".join(output_parts)
 
             if not result_message and process.returncode == 0:
                 result_message = "Code executed successfully with no output to stdout or stderr."
             elif not result_message and process.returncode != 0:
                 result_message = f"Code execution failed with return code {process.returncode} and no specific error message."
-            elif process.returncode != 0 and "Standard Error" not in result_message: 
+            elif process.returncode != 0 and "Standard Error" not in result_message:
                  result_message += f"\nCode execution finished with return code: {process.returncode}"
 
             new_files = set(os.listdir('.')) - initial_files
@@ -157,7 +159,7 @@ class PythonCodeExecutorTool(BaseTool):
             for filename in new_files:
                 if os.path.isfile(filename) and not filename.startswith(('.', '__')):
                     detected_files.append(filename)
-            
+
             if detected_files:
                 result_message += f"\n\nFiles created during execution: {', '.join(detected_files)}"
 

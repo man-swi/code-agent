@@ -15,13 +15,6 @@ from tools.python_executor import PythonCodeExecutorTool
 from utils.callbacks import StreamlitCodeExecutionCallbackHandler, InterceptToolCall
 from tools.task_completed import TaskCompletedTool
 
-# NEW: Import LangChain message types for injecting history into agent memory
-from langchain_core.messages import HumanMessage, AIMessage
-
-# NEW: Import generate_chat_name from chat_utils
-# In custom_code_agent.py, line 22
-from utils.chat_utils import generate_chat_name
-
 # Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
@@ -32,72 +25,17 @@ st.set_page_config(page_title="AI Code Assistant", page_icon="🤖")
 st.title("AI Code Assistant (Groq)")
 st.caption("A ReAct agent powered by Groq (Llama3) for Python code generation and execution.")
 
-# --- Helper to generate a unique/descriptive chat name ---
-# REMOVED: Redundant generate_chat_name function, now imported from chat_utils.py
-# def generate_chat_name(initial_prompt: str) -> str:
-#     """Generates a concise name for a chat based on its first prompt."""
-#     if not initial_prompt:
-#         return "Untitled Chat"
-#     
-#     # Simple truncation for display
-#     name = initial_prompt.strip()
-#     if len(name) > 30:
-#         return name[:27] + "..."
-#     return name
-
 # --- Session State Initialization and Reset Function ---
 def initialize_session_state():
     """Initializes or resets all relevant session state variables for a new chat."""
-
-    # --- MODIFIED/NEW: Master list for all conversations and current index ---
-    if "all_conversations" not in st.session_state:
-        st.session_state.all_conversations = [] # List of dictionaries: {'name': str, 'messages': list}
-        st.session_state.current_conversation_index = -1 # No chat active initially
-
-    # Ensure there's always at least one conversation to start with, or if switching
-    if not st.session_state.all_conversations: # First run ever, or all chats were deleted
-        st.session_state.all_conversations.append({
-            'name': 'New Chat', # Default name for the first chat
-            'messages': [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
-        })
-        st.session_state.current_conversation_index = 0
-    elif st.session_state.current_conversation_index == -1: # After a "New Chat" logic but before full re-init
-        st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
-
-
-    # Link st.session_state.messages to the currently active conversation in the list
-    # All subsequent append/read operations on st.session_state.messages will automatically
-    # act on the selected conversation's history.
-    st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]['messages']
-    # --- END MODIFIED/NEW ---
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+        st.session_state.messages.append({"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"})
 
     # Initialize Agent Executor and Tools
     if "agent_executor" not in st.session_state or st.session_state.get("needs_reinitialization", False):
         try:
-            # Convert current Streamlit messages to LangChain message format for agent memory
-            lc_chat_history = []
-            for msg in st.session_state.messages:
-                if isinstance(msg["content"], str):
-                    if msg["role"] == "user":
-                        lc_chat_history.append(HumanMessage(content=msg["content"]))
-                    elif msg["role"] == "assistant":
-                        lc_chat_history.append(AIMessage(content=msg["content"]))
-                elif isinstance(msg["content"], dict) and msg["content"].get("type") == "code_execution":
-                    # For code execution, include both the code input and the output for agent's context
-                    # This ensures agent remembers code and results properly.
-                    # It's crucial for agent to "see" what was executed and its outcome.
-                    lc_chat_history.append(HumanMessage(content=f"Executed Python code:\n```python\n{msg['content']['code']}\n```"))
-                    lc_chat_history.append(AIMessage(content=f"Code Execution Result:\n```\n{msg['content']['output']}\n```"))
-                # Other structured message types (charts, files) are for UI display, not directly agent memory.
-            
             agent_exec = get_agent_executor()
-            # --- THE CRITICAL FIX IS ON THESE LINES ---
-            # Clear any existing messages in the buffer (from previous initializations)
-            agent_exec.memory.clear()
-            # Extend the buffer with the current conversation's history
-            agent_exec.memory.buffer.extend(lc_chat_history)
-            # --- END OF CRITICAL FIX ---
-
             python_executor_tool = next(tool for tool in agent_exec.tools if tool.name == "python_code_executor")
             task_completed_tool = next(tool for tool in agent_exec.tools if tool.name == "task_completed")
             callback_logs_buffer = StringIO()
@@ -114,7 +52,7 @@ def initialize_session_state():
             st.error(f"Failed to initialize Agent: {e}. Please ensure your Groq API key is correct and valid. Check Groq's model deprecation notices.")
             st.stop()
 
-    # State for Human-in-the-Loop flow and Final Answer (keep as is)
+    # State for Human-in-the-Loop flow and Final Answer
     if "pending_action" not in st.session_state:
         st.session_state.pending_action = None
     if "pending_final_answer" not in st.session_state:
@@ -138,7 +76,7 @@ def initialize_session_state():
     if "execution_count" not in st.session_state:  # Track number of code executions in a chain
         st.session_state.execution_count = 0
 
-    # Flags to handle new user prompts vs agent continuations (keep as is)
+    # Flags to handle new user prompts vs agent continuations
     if "last_user_prompt" not in st.session_state:
         st.session_state.last_user_prompt = None
 
@@ -146,22 +84,8 @@ initialize_session_state()
 
 # Function to reset the chat for a new conversation
 def reset_chat_and_agent():
-    # --- MODIFIED: Save current conversation before starting a new one ---
-    # (The current conversation is already saved by reference via st.session_state.messages)
-    
-    # Create a new, empty conversation with a default name
-    new_chat_entry = {
-        'name': 'New Chat',
-        'messages': [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
-    }
-    st.session_state.all_conversations.append(new_chat_entry)
-    st.session_state.current_conversation_index = len(st.session_state.all_conversations) - 1
-    
-    # Update st.session_state.messages to point to this new conversation's messages
-    st.session_state.messages = st.session_state.all_conversations[st.session_state.current_conversation_index]['messages']
-    # --- END MODIFIED ---
-
-    st.session_state.needs_reinitialization = True # Force agent re-init for new chat
+    st.session_state.messages = [{"role": "assistant", "content": "Hello! I am your AI Code Assistant. How can I help you with Python today?"}]
+    st.session_state.needs_reinitialization = True
     st.session_state.pending_action = None
     st.session_state.pending_final_answer = None
     st.session_state.agent_continuation_needed = False
@@ -191,55 +115,8 @@ with st.sidebar:
         st.success("Groq API Key detected from environment.")
 
     st.markdown("---")
-    
-    # --- MODIFIED: Conversation Selector to display names ---
-    chat_names = [conv['name'] for conv in st.session_state.all_conversations]
-    
-    # Ensure index is valid, especially on first load
-    current_idx_for_selectbox = st.session_state.current_conversation_index if st.session_state.current_conversation_index >= 0 else 0
-    
-    # Use a dummy key if chat_options is empty to avoid Streamlit errors on first run
-    selector_key = "chat_selector" if chat_names else "chat_selector_empty"
-
-    selected_chat_label = st.selectbox(
-        "Select Conversation", 
-        chat_names, # Use chat_names for display
-        index=current_idx_for_selectbox, 
-        key=selector_key
-    )
-
-    # Logic to switch chat if a different one is selected
-    if selected_chat_label and chat_names: # Ensure chat_names is not empty
-        new_index = chat_names.index(selected_chat_label)
-        if new_index != st.session_state.current_conversation_index:
-            # The current conversation is already saved by reference
-
-            # Update to the newly selected conversation index
-            st.session_state.current_conversation_index = new_index
-            st.session_state.messages = st.session_state.all_conversations[new_index]['messages'] # Update the messages pointer
-
-            # Force agent re-initialization with the history of the selected chat
-            st.session_state.needs_reinitialization = True
-            
-            # Reset any pending HIL states for a clean transition
-            st.session_state.pending_action = None
-            st.session_state.pending_final_answer = None
-            st.session_state.agent_continuation_needed = False
-            st.session_state.last_processed_observation = None
-            st.session_state.last_agent_action_log_entry = None
-            st.session_state.current_agent_chain_user_prompt = None
-            st.session_state.last_user_prompt = None
-            st.session_state.last_executed_code = None
-            st.session_state.last_successful_output = None
-            st.session_state.last_generated_chart_data = None
-            st.session_state.last_generated_plot_file = None
-            st.session_state.execution_count = 0
-
-            st.rerun()
-    # --- END MODIFIED ---
-    
     if st.button("New Chat", on_click=reset_chat_and_agent, help="Start a fresh conversation and clear agent memory."):
-        pass # The on_click handler will trigger the logic and rerun
+        pass
 
     st.markdown("---")
     st.markdown("Developed with Streamlit and LangChain.")
@@ -270,7 +147,7 @@ for message in st.session_state.messages:
             
             elif message["content"].get("type") == "file_display":
                 if message["content"]["mime"].startswith("image/"):
-                    st.image(message["content"]["data"], caption=message["content"].get("caption", "Generated Image"), use_container_width=True)
+                    st.image(message["content"]["data"], caption=message["content"].get("caption", "Generated Image"), use_container_width=True) # FIXED HERE
                 else:
                     st.info(f"File created: {message['content']['file_name']}")
                 
@@ -281,14 +158,6 @@ for message in st.session_state.messages:
                         file_name=message["content"].get("file_name", "download.bin"),
                         mime=message["content"].get("mime", "application/octet-stream")
                     )
-            # --- NEW: Handle code execution messages to show code persistently ---
-            elif message["content"].get("type") == "code_execution":
-                st.markdown("**Agent proposed code:**")
-                st.code(message["content"]["code"], language="python")
-                st.markdown("**Code Execution Result:**")
-                st.code(message["content"]["output"], language="bash") # Use bash for generic output/error, or 'text'
-            # --- END NEW ---
-            
             elif "content_text" in message["content"]:
                 st.markdown(message["content"]["content_text"])
         else:
@@ -299,7 +168,6 @@ if st.session_state.pending_action:
     with st.chat_message("assistant"):
         proposed_code = st.session_state.pending_action["tool_input"]
 
-        # Display the proposed code as the agent actually sent it (before _clean_code)
         st.warning("The agent proposes to execute the following Python code:")
         st.code(proposed_code, language="python")
         
@@ -308,28 +176,16 @@ if st.session_state.pending_action:
             if st.button("Approve & Execute Code", key="approve_code"):
                 with st.spinner("Executing proposed code..."):
                     execution_result = st.session_state.python_executor_tool.execute_code_after_approval(
-                        proposed_code # Pass the raw proposed code for cleaning within the executor
+                        proposed_code
                     )
                 
-                # --- MODIFIED: Store code and result in a structured message ---
-                code_execution_message = {
-                    "role": "assistant",
-                    "content": {
-                        "type": "code_execution",
-                        "code": proposed_code, # Display the originally proposed code
-                        "output": execution_result
-                    }
-                }
-                # Check if the last message is identical to avoid duplication on rerun
+                result_display_content = f"**Code Execution Result:**\n```\n{execution_result}\n```"
                 if not (st.session_state.messages and 
-                        isinstance(st.session_state.messages[-1]["content"], dict) and 
-                        st.session_state.messages[-1]["content"].get("type") == "code_execution" and
-                        st.session_state.messages[-1]["content"].get("code") == proposed_code and
-                        st.session_state.messages[-1]["content"].get("output") == execution_result):
-                    st.session_state.messages.append(code_execution_message)
+                        isinstance(st.session_state.messages[-1]["content"], str) and 
+                        st.session_state.messages[-1]["content"] == result_display_content):
+                    st.session_state.messages.append({"role": "assistant", "content": result_display_content})
                 else:
                     st.info("Code executed. Result is identical to previous output and already displayed above.")
-                # --- END MODIFIED ---
                 
                 st.session_state.execution_count += 1
                 st.session_state.last_executed_code = proposed_code
@@ -429,12 +285,6 @@ if st.session_state.pending_action:
                                 st.session_state.last_generated_plot_file = file_display_entry
                             else:
                                 # For other file types, display immediately in the chat
-                                # Avoid duplicating if it was already part of code_execution_message.
-                                # For simplicity, only append if not already part of code_execution.
-                                # This append logic for files outside of code_execution_message is mostly for when agent
-                                # creates a file without explicit print, or if file detection is separated.
-                                # Given the new code_execution_message, this might be slightly redundant for some files
-                                # but harmless.
                                 st.session_state.messages.append({"role": "assistant", "content": file_display_entry})
                                 
                         except Exception as e:
@@ -471,8 +321,8 @@ if st.session_state.pending_final_answer:
                 st.subheader(chart_msg_content.get("title", "Generated Chart"))
                 try:
                     df = chart_msg_content["data"]
-                    x_label = chart_msg_content.get("x_label") # Corrected from message["content"]
-                    y_label = chart_msg_content.get("y_label") # Corrected from message["content"]
+                    x_label = chart_msg_content.get("x_label")
+                    y_label = chart_msg_content.get("y_label")
                     if x_label and y_label and x_label in df.columns and y_label in df.columns:
                         st.line_chart(df, x=x_label, y=y_label, use_container_width=True)
                     else:
@@ -491,7 +341,7 @@ if st.session_state.pending_final_answer:
             with st.container():
                 st.markdown("---")
                 file_msg_content = st.session_state.last_generated_plot_file
-                st.image(file_msg_content["data"], caption=file_msg_content.get("caption", "Generated Plot"), use_container_width=True)
+                st.image(file_msg_content["data"], caption=file_msg_content.get("caption", "Generated Plot"), use_container_width=True) # FIXED HERE
                 st.download_button(
                     label=file_msg_content.get("download_label"),
                     data=file_msg_content.get("data"),
@@ -542,11 +392,9 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
         st.session_state.last_agent_action_log_entry = None
         
         # --- MODIFIED COMPLETION LOGIC ---
-        # This auto-completion is a fallback; agent should ideally call task_completed
         if "Standard Output:" in current_observation and "Standard Error:" not in current_observation:
             raw_output = current_observation.replace("Standard Output:", "").strip()
             
-            # Auto-complete if it's a short interaction or many executions
             if st.session_state.current_agent_chain_user_prompt and (st.session_state.execution_count == 1 or st.session_state.execution_count > 5):
                 final_answer_text = f"Task completed based on code execution. The output is: {raw_output}"
                 
@@ -626,7 +474,7 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                                 st.session_state.messages.append({"role": "assistant", "content": file_display_data})
                                 
                             except Exception as file_display_e:
-                                st.warning(f"Could not load or display file {filename}: {file_display_e}")
+                                st.warning(f"Could not display or prepare download for generated file ({filename}): {file_display_e}")
                         else:
                             st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
                 
@@ -691,9 +539,4 @@ if not st.session_state.pending_action and \
     if user_prompt:
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         st.session_state.last_user_prompt = user_prompt
-        # --- NEW: Update chat name on first user prompt in a 'New Chat' ---
-        current_chat_entry = st.session_state.all_conversations[st.session_state.current_conversation_index]
-        if current_chat_entry['name'] == 'New Chat': # Only update if it's the default name
-            current_chat_entry['name'] = generate_chat_name(user_prompt)
-        # --- END NEW ---
         st.rerun()

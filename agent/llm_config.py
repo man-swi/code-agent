@@ -1,46 +1,49 @@
-# agent/core.py
+# agent/llm_config.py
 import os
-from typing import List
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.tools import BaseTool, render_text_description
-from langchain.memory import ConversationBufferMemory
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
 
-from tools.python_executor import PythonCodeExecutorTool
-from tools.task_completed import TaskCompletedTool
-from agent.prompt import prompt
-from agent.llm_config import get_groq_llm
+# Load environment variables from .env file
+load_dotenv()
 
-def get_agent_executor():
-    """Initializes and returns the LangChain Agent Executor with all fixes."""
-    llm = get_groq_llm()
-    tools: List[BaseTool] = [PythonCodeExecutorTool(), TaskCompletedTool()]
-    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+def get_groq_llm():
+    """
+    Initializes and returns the Groq LLM based on environment variables.
 
-    rendered_tools = render_text_description(tools)
-    tool_names = ", ".join([t.name for t in tools])
+    Reads configuration for the API key, model name, temperature, and
+    max iterations from environment variables, with sensible defaults.
 
-    final_prompt = prompt.partial(
-        tools=rendered_tools,
-        tool_names=tool_names,
-    )
+    Raises:
+        ValueError: If GROQ_API_KEY is not found in the environment.
+        RuntimeError: If there is an error initializing the LLM.
+
+    Returns:
+        ChatGroq: An instance of the configured Groq LLM.
+    """
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not found in environment variables. Please set it in your .env file.")
+
+    # Get model parameters from environment or use defaults
+    model_name = os.getenv("AGENT_MODEL_NAME", "llama3-70b-8192")
+    try:
+        temperature = float(os.getenv("AGENT_TEMPERATURE", "0.05"))
+    except (ValueError, TypeError):
+        temperature = 0.05
+        print(f"Warning: Invalid AGENT_TEMPERATURE. Using default value: {temperature}")
+
 
     try:
-        max_iterations = int(os.getenv("AGENT_MAX_ITERATIONS", "20"))
-    except (ValueError, TypeError):
-        max_iterations = 20
-
-    agent = create_react_agent(
-        llm=llm,
-        tools=tools,
-        prompt=final_prompt
-    )
-
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        verbose=True,
-        handle_parsing_errors="Check your output and make sure it conforms to the Action/Action Input format.",
-        max_iterations=max_iterations,
-        memory=memory,
-    )
-    return agent_executor
+        llm = ChatGroq(
+            temperature=temperature,
+            model_name=model_name,
+            groq_api_key=GROQ_API_KEY
+        )
+        return llm
+    except Exception as e:
+        error_message = (
+            f"Error initializing or testing Groq LLM: {e}. "
+            f"Please ensure your GROQ_API_KEY is correct and the model name ('{model_name}') is valid. "
+            "Check available models at https://console.groq.com/docs/models"
+        )
+        raise RuntimeError(error_message) from e

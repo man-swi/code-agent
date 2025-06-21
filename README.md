@@ -138,5 +138,5 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 ## Contact
 - **Author**: Manish Swarnkar
 - **GitHub**: [man-swi](https://github.com/man-swi)
-- **Email**: [your-email@example.com](mailto:your-email@example.com)
+- **Email**: [kamblemanswi8@gmail.com](mailto:kamblemanswi8@gmail.com)
 - For support, open an issue on GitHub or contact the author directly.

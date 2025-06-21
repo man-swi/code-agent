@@ -136,7 +136,7 @@ Contributions are welcome! Please:
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Contact
-- **Author**: Manish Swarnkar
+- **Author**: Manaswi Kamble
 - **GitHub**: [man-swi](https://github.com/man-swi)
 - **Email**: [kamblemanswi8@gmail.com](mailto:kamblemanswi8@gmail.com)
 - For support, open an issue on GitHub or contact the author directly.

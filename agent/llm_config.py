@@ -1,22 +1,46 @@
+# agent/core.py
 import os
-import sys
-from dotenv import load_dotenv
-from langchain_groq import ChatGroq
+from typing import List
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain_core.tools import BaseTool, render_text_description
+from langchain.memory import ConversationBufferMemory
 
-load_dotenv() # Load environment variables here as well, in case this module is imported directly
+from tools.python_executor import PythonCodeExecutorTool
+from tools.task_completed import TaskCompletedTool
+from agent.prompt import prompt
+from agent.llm_config import get_groq_llm
 
-def get_groq_llm():
-    """Initializes and returns the Groq LLM."""
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY not found in environment variables. Please set it or enter it in the Streamlit sidebar.")
+def get_agent_executor():
+    """Initializes and returns the LangChain Agent Executor with all fixes."""
+    llm = get_groq_llm()
+    tools: List[BaseTool] = [PythonCodeExecutorTool(), TaskCompletedTool()]
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
+    rendered_tools = render_text_description(tools)
+    tool_names = ", ".join([t.name for t in tools])
+
+    final_prompt = prompt.partial(
+        tools=rendered_tools,
+        tool_names=tool_names,
+    )
 
     try:
-        llm = ChatGroq(
-            temperature=0.05,
-            model_name="llama3-70b-8192", 
-            groq_api_key=GROQ_API_KEY
-        )
-        return llm
-    except Exception as e:
-        raise RuntimeError(f"Error initializing or testing Groq LLM: {e}. Please ensure your GROQ_API_KEY is correct and the model name is valid. Check available models at https://console.groq.com/docs/models") from e
+        max_iterations = int(os.getenv("AGENT_MAX_ITERATIONS", "20"))
+    except (ValueError, TypeError):
+        max_iterations = 20
+
+    agent = create_react_agent(
+        llm=llm,
+        tools=tools,
+        prompt=final_prompt
+    )
+
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        handle_parsing_errors="Check your output and make sure it conforms to the Action/Action Input format.",
+        max_iterations=max_iterations,
+        memory=memory,
+    )
+    return agent_executor

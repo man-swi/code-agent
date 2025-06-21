@@ -1,6 +1,6 @@
 # AI Code Assistant Agent
 
-Welcome to the **AI Code Assistant Agent**, a powerful Streamlit-based application powered by Groq's Llama3 model. This ReAct agent assists users in generating, executing, and visualizing Python code through an interactive Human-in-the-Loop (HIL) workflow. Designed for developers, educators, and data enthusiasts, it supports a wide range of tasks from simple calculations to complex data visualizations.
+Welcome to the **AI Code Assistant Agent**, a powerful Streamlit-based application powered by Groq's Llama3 model. This ReAct agent assists users in generating, executing, and visualizing Python code through an interactive Human-in-the-Loop (HIL) workflow. Designed for developers, educators, and data enthusiasts, it supports tasks such as calculations, data analysis, and visualizations, with dynamic conversation management and user feedback integration.
 
 ## Table of Contents
 - [Features](#features)
@@ -16,13 +16,13 @@ Welcome to the **AI Code Assistant Agent**, a powerful Streamlit-based applicati
 - [Contact](#contact)
 
 ## Features
-- **Interactive Code Generation**: Proposes Python code for user approval before execution.
-- **Human-in-the-Loop (HIL)**: Allows manual review and editing of code via the UI.
-- **Visualization Support**: Generates line charts (via JSON) and saves complex plots (e.g., PNG files) using Matplotlib/Seaborn.
-- **Conversation Management**: Supports multiple chat sessions with dynamic naming.
-- **Performance Metrics**: Displays processing time for each task.
-- **Feedback System**: Collects user feedback with 👍/👎 options.
-- **File Uploads**: Processes uploaded CSV, TXT, and other data files.
+- **Interactive Code Generation**: Proposes Python code for user approval before execution in a sandboxed environment.
+- **Human-in-the-Loop (HIL)**: Displays proposed code for manual review and approval/cancellation via UI buttons.
+- **Visualization Support**: Generates line charts from JSON data (e.g., `PLOT_DATA_JSON_START` format) and saves complex plots (e.g., PNG files) using Matplotlib/Seaborn, with download options.
+- **Conversation Management**: Supports multiple chat sessions with dynamic naming based on the first user prompt, selectable via a sidebar.
+- **Performance Metrics**: Displays total processing time for each task completion.
+- **Feedback System**: Allows users to provide 👍/👎 feedback after task completion, with a toast notification confirmation.
+- **File Handling**: Detects and processes files created during execution (e.g., CSV, PNG) and offers downloads for generated files.
 
 ## Prerequisites
 Before running the application, ensure your system meets the following requirements:
@@ -36,7 +36,7 @@ Before running the application, ensure your system meets the following requireme
   - `pandas`
   - `matplotlib`
   - `seaborn`
-  - `psutil` (for advanced metrics)
+  - `psutil` (optional, for potential future metrics)
 
 ## Installation
 Follow these steps to set up the AI Code Assistant locally:
@@ -87,24 +87,23 @@ Follow these steps to set up the AI Code Assistant locally:
 ### Examples
 - **Simple Calculation**:
   - Input: `Calculate the sum of 1 to 10`
-  - Expected Output: Agent proposes code, user approves, and the result "55" is displayed.
+  - Expected Output: Agent proposes a script (e.g., `sum(range(1, 11))`), user approves, and "55" is displayed.
 
 - **Data Visualization**:
-  - Input: `Load the Iris dataset and create a line chart of sepal length`
-  - Expected Output: Agent generates code, creates a chart, and displays it with a download option.
+  - Input: `Create a line chart with x=[1, 2, 3] and y=[4, 5, 6]`
+  - Expected Output: Agent generates JSON data, renders a line chart, and displays it in the UI.
 
-- **File Processing**:
-  - Upload a `data.txt` file with "hello world".
-  - Input: `Count the frequency of words in data.txt`
-  - Expected Output: Displays word counts (e.g., "hello: 1, world: 1").
+- **File Generation**:
+  - Input: `Save a list [1, 2, 3] to a CSV file`
+  - Expected Output: Agent creates a CSV file, confirms its creation, and offers a download link.
 
 ## Configuration
 - **Sidebar Options**:
-  - **LLM Model**: Switch between `llama3-70b-8192` (powerful, slower) and `llama3-8b-8192` (faster).
-  - **Temperature**: Adjust from 0.0 (deterministic) to 1.0 (creative) using the slider.
-  - **API Key**: Enter or verify your Groq API key.
-  - **New Chat**: Start a fresh conversation.
-  - **Conversation Selector**: Switch between saved chats.
+  - **LLM Model**: Switch between `llama3-70b-8192` (powerful, slower) and `llama3-8b-8192` (faster), applied to new chats.
+  - **Temperature**: Adjust from 0.0 (deterministic) to 1.0 (creative) using a slider, applied to new chats.
+  - **API Key**: Enter or verify your Groq API key; updates require reinitialization.
+  - **New Chat**: Starts a fresh conversation, resetting agent state.
+  - **Conversation Selector**: Switch between existing chats by display name.
 
 ## Troubleshooting
 - **Application Fails to Start**:
@@ -119,10 +118,13 @@ Follow these steps to set up the AI Code Assistant locally:
 
 - **Charts Not Displaying**:
   - Ensure `matplotlib` and `seaborn` are installed.
-  - Verify the agent outputs valid JSON (e.g., `PLOT_DATA_JSON_START:...`).
+  - Verify the agent outputs valid JSON (e.g., `PLOT_DATA_JSON_START:...`) or file paths.
 
 - **Timeout Errors**:
-  - Code execution is limited to 60 seconds. Simplify complex tasks or increase timeout in `python_executor.py` if needed.
+  - Code execution is limited to 60 seconds. Simplify tasks or check for `input()` usage, which is unsupported.
+
+- **Error Resets**:
+  - If an unexpected error occurs, the chat resets to a new session. Retry the prompt.
 
 ## Contributing
 Contributions are welcome! Please:
@@ -140,3 +142,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 - **GitHub**: [man-swi](https://github.com/man-swi)
 - **Email**: [kamblemanswi8@gmail.com](mailto:kamblemanswi8@gmail.com)
 - For support, open an issue on GitHub or contact the author directly.
+```

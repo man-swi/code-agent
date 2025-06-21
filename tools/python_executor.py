@@ -8,9 +8,16 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import BaseTool
 
 class PythonCodeExecutorToolInput(BaseModel):
-    code: str = Field(description="The Python code to execute. It should be a complete, runnable script without any markdown formatting.")
+    """Input schema for the PythonCodeExecutorTool."""
+    code: str = Field(description="The Python code to execute. Must be a complete, runnable script without markdown.")
 
 class PythonCodeExecutorTool(BaseTool):
+    """
+    A tool for executing Python code in a sandboxed environment.
+    This tool takes a string of Python code, cleans it robustly, validates it,
+    and then presents it to the user for approval. If approved, it executes
+    the code in a separate process.
+    """
     name: str = "python_code_executor"
     description: str = (
         "Executes a given snippet of Python code and returns its standard output and standard error. "
@@ -19,76 +26,97 @@ class PythonCodeExecutorTool(BaseTool):
         "fences (like ```python or ```). "
         "Ensure the Python code is self-contained and prints any results to standard output (e.g., using `print(result)`)."
         "When this tool is called, the code will be presented to the user for confirmation before execution."
-        "If the code saves a file (e.g., image, GIF), mention the filename in the output so the user knows where to find it."
     )
     args_schema: Type[BaseModel] = PythonCodeExecutorToolInput
 
     def _clean_and_validate(self, code_input: str) -> (str, bool):
         """
-        The definitive cleaning and validation function.
-        Returns a tuple: (cleaned_code, is_valid).
+        Cleans and validates the input code string with a robust strategy.
+
+        This function performs a multi-step cleaning process:
+        1.  It first attempts to find and extract code from within markdown fences
+            (```python...``` or ```...```), discarding any surrounding text. This is
+            the most reliable method.
+        2.  If no markdown block is found, it falls back to stripping the fences from
+            the start/end of the entire string.
+        3.  Finally, it uses `compile()` as a definitive check for valid Python syntax.
+
+        Returns:
+            A tuple containing the cleaned code (or an error message) and a boolean
+            indicating if the code is valid.
         """
         if not isinstance(code_input, str):
             return "Error: Input code must be a string.", False
 
-        # 1. Strip markdown fences
-        code = re.sub(r"^\s*```(?:python)?\s*\n", "", code_input)
-        code = re.sub(r"\n\s*```\s*$", "", code)
-        code = code.strip()
+        code = code_input
 
-        # 2. Split into lines and filter out conversational text and ellipsis
-        lines = code.split('\n')
-        code_lines = []
-        
-        # This regex is now more robust to catch leading conversational phrases
-        conversational_pattern = re.compile(
-            r"^\s*(here's|here is|the following is|please confirm|certainly|of course|sure, this code|i've prepared|please find below|let me know)\b.*$",
-            re.IGNORECASE
-        )
+        # **Strategy 1: Find and extract a markdown code block.**
+        # This is the most robust way to handle LLM-generated code.
+        code_block_match = re.search(r"```(?:python)?\s*\n(.*?)\n```", code, re.DOTALL)
+        if code_block_match:
+            # If a block is found, we use its content exclusively.
+            cleaned_code = code_block_match.group(1).strip()
+        else:
+            # **Strategy 2: Fallback for code without markdown fences.**
+            # This is less robust but handles cases where the LLM forgets the fences.
+            # We aggressively strip fences and any conversational lines.
+            
+            # First, strip potential markdown fences from the whole block
+            temp_code = re.sub(r"^\s*```(?:python)?\s*", "", code)
+            temp_code = re.sub(r"```\s*$", "", temp_code)
+            
+            # Split into lines and filter out common non-code phrases
+            lines = temp_code.strip().split('\n')
+            code_lines = []
+            non_code_patterns = [
+                re.compile(r"^\s*(here's|here is|the following is|please confirm|certainly|of course|i've prepared|please find below|let me know)\b.*$", re.IGNORECASE),
+                re.compile(r"^\s*\.\.\.\s*$"), # Ellipsis line
+                re.compile(r"^\s*please confirm the execution of this code\s*$", re.IGNORECASE)
+            ]
+            
+            for line in lines:
+                is_non_code = False
+                for pattern in non_code_patterns:
+                    if pattern.match(line):
+                        is_non_code = True
+                        break
+                if not is_non_code:
+                    code_lines.append(line)
+            
+            cleaned_code = "\n".join(code_lines).strip()
 
-        for line in lines:
-            stripped_line = line.strip()
-            # Explicitly remove ellipsis lines and conversational lines
-            if stripped_line == '...':
-                continue
-            if conversational_pattern.match(stripped_line):
-                continue
-            code_lines.append(line)
-
-        cleaned_code = "\n".join(code_lines).strip()
 
         if not cleaned_code:
-            return "Error: No valid Python code found after cleaning.", False
+            return "Error: No valid Python code found after cleaning the input.", False
 
-        # 3. Final validation with compile()
+        # **Final Validation with compile()**
         try:
             compile(cleaned_code, '<string>', 'exec')
             return cleaned_code, True
         except SyntaxError as e:
-            error_message = f"Syntax Error in generated code: {e}. The code is not valid Python. Please regenerate the code."
+            error_message = f"Syntax Error after cleaning: {e}. The final code block is not valid Python."
             return error_message, False
 
     def _run(self, code: str) -> str:
         """
-        This is called by the agent to PROPOSE the code. We just clean it.
-        The UI will show this cleaned code to the user.
+        This method is called by the agent to propose code. It cleans and
+        validates the code before it's shown to the user.
         """
         cleaned_code, is_valid = self._clean_and_validate(code)
         if not is_valid:
-            # If the code is invalid from the start, we return the error
-            # so the agent can see its mistake immediately.
+            # Return the error message directly to the agent's observation
             return cleaned_code
         return cleaned_code
 
     def execute_code_after_approval(self, raw_code_input: str) -> str:
-        """This runs AFTER the user clicks 'Approve & Execute'."""
+        """
+        Executes the Python code after user approval from the Streamlit UI.
+        """
         cleaned_code, is_valid = self._clean_and_validate(raw_code_input)
 
         if not is_valid:
-            # This provides the error message directly to the user's view.
             return f"Standard Error:\n{cleaned_code}"
 
-        # Now, execute the validated code
         initial_files = set(os.listdir('.'))
         try:
             process = subprocess.run(
@@ -101,12 +129,10 @@ class PythonCodeExecutorTool(BaseTool):
                 output_parts.append(f"Standard Output:\n{process.stdout.strip()}")
             if process.stderr:
                 output_parts.append(f"Standard Error:\n{process.stderr.strip()}")
+            result_message = "\n".join(output_parts) or "Code executed with no output."
 
-            result_message = "\n".join(output_parts)
-            if not result_message:
-                result_message = "Code executed successfully with no output."
-
-            new_files = set(os.listdir('.')) - initial_files
+            final_files = set(os.listdir('.'))
+            new_files = final_files - initial_files
             detected_files = [f for f in new_files if os.path.isfile(f) and not f.startswith('.')]
             if detected_files:
                 result_message += f"\n\nFiles created during execution: {', '.join(sorted(detected_files))}"
@@ -114,9 +140,10 @@ class PythonCodeExecutorTool(BaseTool):
             return result_message.strip()
 
         except subprocess.TimeoutExpired:
-            return "Error: Code execution timed out after 60 seconds."
+            return "Standard Error:\nExecution timed out after 60 seconds."
         except Exception as e:
-            return f"An unexpected error occurred during execution: {str(e)}"
+            return f"Standard Error:\nAn unexpected error occurred during execution: {str(e)}"
 
     async def _arun(self, code: str) -> str:
+        """Asynchronous version of the run method."""
         return self._run(code)

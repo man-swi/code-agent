@@ -11,3 +11,8 @@ matplotlib
 seaborn
 pillow
 ffmpeg
+networkx
+pytest
+pytest-mock
+transformers
+torch

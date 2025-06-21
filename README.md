@@ -58,23 +58,22 @@ Streamlit UI
 ## 📦 Installation
 
 1. **Clone the repository**:
-   ```bash
+
    git clone https://github.com/man-swi/code-agent.git
    cd code-agent
-````
+
 
 2. **Set up virtual environment (recommended)**:
 
-   ```bash
+ 
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+  
 
 3. **Install requirements**:
 
-   ```bash
    pip install -r requirements.txt
-   ```
+   
 
 4. **Create `.env` file**:
 
@@ -153,6 +152,3 @@ MIT License – see the [LICENSE](LICENSE) file.
 * GitHub: [@man-swi](https://github.com/man-swi)
 * Email: [kamblemanswi8@gmail.com](mailto:kamblemanswi8@gmail.com)
 
----
-
-```

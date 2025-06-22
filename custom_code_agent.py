@@ -203,7 +203,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.markdown("Developed by [Manish Swarnkar](https://github.com/man-swi).")
+    st.markdown("Developed by [Manaswi Kamble](https://github.com/man-swi).")
 
 # --- Display Chat Messages ---
 for message in get_current_messages():

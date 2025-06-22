@@ -257,18 +257,30 @@ for message in get_current_messages():
             st.markdown(message["content"])
 
 # --- Human-in-the-Loop (HIL) Section for Code Execution ---
+# <<< MODIFIED: This entire section is updated for better UI and functionality >>>
 if st.session_state.pending_action:
     with st.chat_message("assistant"):
-        proposed_code = st.session_state.pending_action["tool_input"]
+        action_details = st.session_state.pending_action
+        proposed_code = action_details["tool_input"]
+        agent_thought = action_details.get("thought", "The agent has proposed code to execute.") # Safely get the thought
 
+        # Display the agent's thought process
+        with st.container(border=True):
+            st.info("🤖 **Agent's Thought Process**")
+            st.markdown(agent_thought)
+
+        # Display the proposed code
         st.warning("The agent proposes to execute the following Python code:")
         st.code(proposed_code, language="python")
 
-        col1, col2, col3 = st.columns([1,1,2])
+        # Create columns for the action buttons
+        col1, col2, col3 = st.columns([1.5, 1.5, 4]) # Adjusted column ratios
+
         with col1:
-            if st.button("✅ Approve & Execute", key="approve_code"):
-                code_to_persist = f"**Proposed Code to Execute:**\n```python\n{proposed_code}\n```"
-                get_current_messages().append({"role": "assistant", "content": code_to_persist})
+            if st.button("✅ Approve & Execute", key="approve_code", use_container_width=True):
+                # Persist the thought and code proposal to the chat history
+                thought_and_code = f"**Agent's Plan:**\n{agent_thought}\n\n**Proposed Code:**\n```python\n{proposed_code}\n```"
+                get_current_messages().append({"role": "assistant", "content": thought_and_code})
 
                 with st.spinner("Executing proposed code..."):
                     execution_result = st.session_state.python_executor_tool.execute_code_after_approval(
@@ -281,11 +293,10 @@ if st.session_state.pending_action:
                 st.session_state.execution_count += 1
                 st.session_state.last_executed_code = proposed_code
                 st.session_state.last_successful_output = execution_result if "Standard Error:" not in execution_result else None
-
                 st.session_state.last_generated_chart_data = None
                 st.session_state.last_generated_plot_file = None
 
-                # --- Process Output for PLOT_DATA_JSON ---
+                # --- Process Output for PLOT_DATA_JSON (No changes here) ---
                 plot_data_match = re.search(r"PLOT_DATA_JSON_START:(.*):PLOT_DATA_JSON_END", execution_result, re.DOTALL)
                 if plot_data_match:
                     try:
@@ -306,7 +317,7 @@ if st.session_state.pending_action:
                     except (json.JSONDecodeError, ValueError) as e:
                         st.warning(f"Failed to parse plot data from agent output: {e}")
 
-                # --- Process Output for Generated Files ---
+                # --- Process Output for Generated Files (No changes here) ---
                 file_creation_match = re.search(r"Files created during execution: (.*)", execution_result, re.DOTALL)
                 if file_creation_match:
                     filenames_str = file_creation_match.group(1)
@@ -333,16 +344,35 @@ if st.session_state.pending_action:
                 st.session_state.agent_continuation_needed = True
                 st.session_state.pending_action = None
                 st.rerun()
+
         with col2:
-            if st.button("❌ Cancel", key="cancel_code"):
+            # <<< NEW: Regenerate Button >>>
+            if st.button("✍️ Regenerate & Retry", key="regenerate_code", use_container_width=True):
+                # Add a message to show the user what's happening
+                get_current_messages().append({
+                    "role": "assistant",
+                    "content": "_The agent's last proposal was discarded. Attempting to generate a new solution..._"
+                })
+                # Reset state to trigger a fresh agent invocation with the same initial prompt
+                st.session_state.pending_action = None
+                st.session_state.agent_continuation_needed = False
+                st.session_state.last_agent_action_log_entry = None
+                # Set last_user_prompt to re-trigger the main agent logic block
+                st.session_state.last_user_prompt = st.session_state.current_agent_chain_user_prompt
+                st.rerun()
+
+        with col3:
+            if st.button("❌ Cancel", key="cancel_code", use_container_width=False): # This button doesn't need to be wide
                 cancellation_message = "Code execution CANCELED by user."
                 get_current_messages().append({"role": "assistant", "content": f"*{cancellation_message}*"})
                 st.session_state.last_processed_observation = cancellation_message
-                st.session_state.agent_continuation_needed = True
+                st.session_state.agent_continuation_needed = True # Let the agent know it was cancelled
                 st.session_state.pending_action = None
                 st.rerun()
 
+
 # --- Handle Task Completed interception ---
+# (No changes needed in this section)
 if st.session_state.pending_final_answer:
     with st.chat_message("assistant"):
         st.success("Task Completed!")
@@ -408,6 +438,7 @@ if st.session_state.pending_final_answer:
         st.session_state.execution_count = 0
 
 # --- Agent Invocation Logic ---
+# (No changes needed in this section)
 if (st.session_state.agent_continuation_needed or st.session_state.get("last_user_prompt")) and \
    not st.session_state.pending_action and not st.session_state.pending_final_answer:
     
@@ -474,6 +505,7 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 st.rerun()
 
 # --- Chat Input ---
+# (No changes needed in this section)
 if not st.session_state.pending_action and \
    not st.session_state.agent_continuation_needed and \
    not st.session_state.pending_final_answer:

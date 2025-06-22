@@ -248,16 +248,34 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
     with st.chat_message("assistant"):
         # Read thought and tool_input from session_state.pending_action
         thought_text = st.session_state.pending_action.get("thought", "Agent's Plan could not be determined.")
-        proposed_code = st.session_state.pending_action.get("tool_input", "# No code was proposed.")
+        proposed_code_raw = st.session_state.pending_action.get("tool_input", "# No code was proposed.")
+
+        # --- Enhanced Cleaning for Proposed Code ---
+        # Clean up proposed_code by removing 'undefined', leading/trailing whitespace, and empty lines
+        if proposed_code_raw.strip().lower() == "undefined" or proposed_code_raw.strip() == "":
+            proposed_code = "# No valid code was proposed."
+        else:
+            # Remove leading text like "Proposed Code:", "undefined" if they are part of the string
+            # This regex aims to be robust against variations in how the agent might prefix the code
+            cleaned_code = re.sub(r"^.*?(?:Thought:|Proposed Code:|\n)+", "", proposed_code_raw, flags=re.DOTALL | re.IGNORECASE)
+            # Ensure only actual code lines are kept and remove empty lines
+            proposed_code = "\n".join([line for line in cleaned_code.splitlines() if line.strip()])
+            if not proposed_code:
+                proposed_code = "# No valid code was proposed."
+        
+        # Additional cleanup: remove any standalone "undefined" instances case-insensitively
+        # This is a direct replacement for any lingering "undefined"
+        proposed_code = re.sub(r'\bundefined\b', '', proposed_code, flags=re.IGNORECASE).strip()
+        # Re-check if code is now empty after cleaning 'undefined'
+        if not proposed_code:
+             proposed_code = "# No valid code was proposed."
+        # --- End Enhanced Cleaning ---
 
         # Display Agent's Plan
         st.markdown(thought_text)
-
-        # --- REMOVED: Removed the "Proposed Code:" header and the "undefined" placeholder ---
-
-        # Display the actual code that the agent intends to execute
-        # This code is directly from the agent's tool_input
-        if proposed_code != "# No code was proposed.": # Only show code block if there's actual code
+        
+        # Display the actual code only if it's not a placeholder
+        if proposed_code != "# No code was proposed." and proposed_code.strip():
             st.code(proposed_code, language="python")
         
         # Buttons for approval/cancellation
@@ -267,8 +285,8 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
                 
                 # Append thought and code to chat history BEFORE execution
                 get_current_messages().append({"role": "assistant", "content": {"type": "thought", "text": thought_text}})
-                if proposed_code != "# No code was proposed.": # Only append code if it exists
-                    get_current_messages().append({"role": "assistant", "content": f"**Proposed Code:**\n```python\n{proposed_code}\n```"})
+                if proposed_code != "# No code was proposed." and proposed_code.strip():
+                    get_current_messages().append({"role": "assistant", "content": f"**Executed Code:**\n```python\n{proposed_code}\n```"})
                 
                 st.session_state.last_executed_code = proposed_code
                 st.session_state.last_successful_output = None # Reset for new execution
@@ -332,7 +350,7 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
                             st.warning(f"Agent mentioned file '{filename}' but it does not exist.")
 
                 st.session_state.last_processed_observation = execution_result.strip()
-                st.session_state.agent_continuation_needed = True # Signal that the agent needs to process the observation
+                st.session_state.agent_continuation_needed = True
                 st.session_state.pending_action = None # Clear pending action after processing
                 st.session_state.hil_prompt_rendered = True # Mark HIL as rendered for this action
                 st.rerun()

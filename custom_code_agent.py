@@ -253,17 +253,22 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
         # Display Agent's Plan
         st.markdown(thought_text)
 
-        # Display Proposed Code
-        st.warning("The agent proposes to execute the following Python code:")
-        st.code(proposed_code, language="python")
+        # --- REMOVED: Removed the "Proposed Code:" header and the "undefined" placeholder ---
 
+        # Display the actual code that the agent intends to execute
+        # This code is directly from the agent's tool_input
+        if proposed_code != "# No code was proposed.": # Only show code block if there's actual code
+            st.code(proposed_code, language="python")
+        
         # Buttons for approval/cancellation
         col1, col2, col3 = st.columns([1,1,2])
         with col1:
             if st.button("✅ Approve & Execute", key="approve_code"):
+                
                 # Append thought and code to chat history BEFORE execution
                 get_current_messages().append({"role": "assistant", "content": {"type": "thought", "text": thought_text}})
-                get_current_messages().append({"role": "assistant", "content": f"**Proposed Code:**\n```python\n{proposed_code}\n```"})
+                if proposed_code != "# No code was proposed.": # Only append code if it exists
+                    get_current_messages().append({"role": "assistant", "content": f"**Proposed Code:**\n```python\n{proposed_code}\n```"})
                 
                 st.session_state.last_executed_code = proposed_code
                 st.session_state.last_successful_output = None # Reset for new execution
@@ -407,13 +412,11 @@ if st.session_state.pending_final_answer:
         st.session_state.hil_prompt_rendered = False # Ensure HIL flag is reset
 
 # --- Agent Invocation Logic ---
-# This block ensures the agent continues if needed, or starts a new turn if a user prompt is available.
 if (st.session_state.agent_continuation_needed or st.session_state.get("last_user_prompt")) and \
    not st.session_state.pending_action and not st.session_state.pending_final_answer:
     
     agent_input = None
     if st.session_state.agent_continuation_needed:
-        # This branch handles continuing the agent's thought process after an observation
         base_scratchpad = st.session_state.last_agent_action_log_entry or ""
         current_observation = st.session_state.last_processed_observation
         agent_input = {
@@ -424,15 +427,13 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
         st.session_state.last_processed_observation = None
         st.session_state.last_agent_action_log_entry = None
     elif st.session_state.get("last_user_prompt"):
-        # This branch handles a new user prompt
         agent_input = {"input": st.session_state.last_user_prompt}
-        st.session_state.current_agent_chain_user_prompt = st.session_state.last_user_prompt # Store for scratchpad
-        st.session_state.last_user_prompt = None # Clear the last user prompt
-        st.session_state.execution_count = 0 # Reset execution count for new prompt
-        st.session_state.feedback_given = False # Reset feedback for new prompt
+        st.session_state.current_agent_chain_user_prompt = st.session_state.last_user_prompt
+        st.session_state.last_user_prompt = None
+        st.session_state.execution_count = 0
+        st.session_state.feedback_given = False
 
     if agent_input:
-        # This block executes the agent's next step (thinking, tool use, etc.)
         with st.chat_message("assistant"):
             thought_process_placeholder = st.empty()
             try:
@@ -456,14 +457,8 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 st.session_state.last_agent_action_log_entry = None
 
             except InterceptToolCall:
-                # This exception is raised by the callback handler when it intercepts
-                # a tool call that requires user interaction (HIL) or signals completion.
-                # The HIL/completion UI is handled by the blocks above, so we just pass here.
-                # Crucially, the rerun from the callback means this agent invocation is paused.
                 pass 
             except Exception as e:
-                # If any other exception occurs during agent invocation
-                # Ensure stdout is restored
                 if sys.stdout != st.session_state.callback_handler._original_stdout:
                     sys.stdout = st.session_state.callback_handler._original_stdout
 
@@ -476,12 +471,11 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                     st.code(captured_logs, language='ansi')
                 
                 get_current_messages().append({"role": "assistant", "content": f"**Error:** {display_error_message}\n**Logs:**\n```ansi\n{captured_logs}\n```"})
-                start_new_chat() # Reset the entire session for a clean slate
+                start_new_chat() # Reset for a clean slate
                 get_current_messages().append({"role": "assistant", "content": "*(Agent session has been reset due to an error. Please try again.)*"})
                 st.rerun()
 
 # --- Chat Input ---
-# Only show chat input if the agent is not currently waiting for HIL or displaying final answer
 if not st.session_state.pending_action and \
    not st.session_state.agent_continuation_needed and \
    not st.session_state.pending_final_answer:
@@ -491,12 +485,11 @@ if not st.session_state.pending_action and \
         current_conv_id = st.session_state.current_conversation_id
         current_conv = st.session_state.conversations[current_conv_id]
         
-        # Dynamically name the conversation based on the first user prompt
         if len(current_conv["messages"]) == 1 and "New Conversation" in current_conv["display_name"]:
             new_display_name = user_prompt[:50] + "..." if len(user_prompt) > 50 else user_prompt
             current_conv["display_name"] = new_display_name
 
         get_current_messages().append({"role": "user", "content": user_prompt})
-        st.session_state.last_user_prompt = user_prompt # Store for agent to pick up
+        st.session_state.last_user_prompt = user_prompt
         st.session_state.start_time = time.time() # Start performance timer
-        st.rerun() # Rerun to process the new user prompt
+        st.rerun()

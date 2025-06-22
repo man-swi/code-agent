@@ -38,15 +38,21 @@ class StreamlitCodeExecutionCallbackHandler(BaseCallbackHandler):
         action_log_entry = self._strip_ansi_codes(action.log)
 
         # Case 1: Intercept Python code execution for user approval.
+        # <<< MODIFIED: Now extracts the 'Thought' and saves it to session state >>>
         if action.tool == self.python_executor_tool.name:
+            # Extract just the 'Thought:' part of the log for cleaner display
+            thought_match = re.search(r"Thought:\s*(.*?)(?=\nAction:)", action_log_entry, re.DOTALL)
+            thought_text = thought_match.group(1).strip() if thought_match else "The agent did not provide a thought."
+
             st.session_state.pending_action = {
                 "tool": action.tool,
                 "tool_input": action.tool_input,
+                "thought": thought_text,  # Save the extracted thought
             }
             st.session_state.last_agent_action_log_entry = action_log_entry
 
             sys.stdout = self._original_stdout
-            st.rerun()
+            st.rerun() # This will stop execution and trigger the HIL UI
             raise InterceptToolCall("Intercepted python_code_executor for HIL.")
 
         # Case 2: Intercept the final answer to display it correctly.
@@ -57,7 +63,7 @@ class StreamlitCodeExecutionCallbackHandler(BaseCallbackHandler):
             st.session_state.current_agent_chain_user_prompt = None
 
             sys.stdout = self._original_stdout
-            st.rerun()
+            st.rerun() # This will stop execution and trigger the final answer UI
             raise InterceptToolCall("Intercepted task_completed to display final answer.")
 
     def on_tool_end(self, output: str, **kwargs: Any) -> Any:

@@ -18,6 +18,8 @@ class StreamlitCodeExecutionCallbackHandler(BaseCallbackHandler):
         gracefully end the agent's turn and display the final result.
     3.  **Log Capturing:** Redirects `stdout` to capture the agent's internal
         "thought" process for display in an expander.
+    4.  **Feedback Prompting:** Triggers the display of a feedback prompt after
+        any successful agent turn (code execution or final answer).
     """
     def __init__(self, python_executor_tool_instance: Any, task_completed_tool_instance: Any, log_buffer: StringIO):
         super().__init__()
@@ -136,9 +138,12 @@ class StreamlitCodeExecutionCallbackHandler(BaseCallbackHandler):
             st.session_state.last_agent_action_log_entry = action_log_content # Save log for final thought display
             st.session_state.agent_continuation_needed = False
             st.session_state.current_agent_chain_user_prompt = None
+            
+            # Mark that an agent turn has been processed so the feedback prompt can appear
+            st.session_state.last_agent_turn_processed = True
 
             sys.stdout = self._original_stdout
-            st.rerun()
+            st.rerun() 
             raise InterceptToolCall("Intercepted task_completed to display final answer.")
         
         # Restore stdout if no tool requires special handling. This is a safeguard.

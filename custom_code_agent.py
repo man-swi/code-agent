@@ -90,6 +90,9 @@ def initialize_session_state():
         st.session_state.last_user_prompt = None
     if "hil_prompt_rendered" not in st.session_state: # Flag to prevent re-rendering HIL
         st.session_state.hil_prompt_rendered = False
+    if "last_agent_turn_processed" not in st.session_state: # Flag to show feedback prompt
+        st.session_state.last_agent_turn_processed = False
+
 
     if "start_time" not in st.session_state:
         st.session_state.start_time = None
@@ -117,8 +120,9 @@ def start_new_chat():
     st.session_state.last_generated_chart_data = None
     st.session_state.last_generated_plot_file = None
     st.session_state.execution_count = 0
-    st.session_state.feedback_given = False
+    st.session_state.feedback_given = False # Reset feedback status
     st.session_state.hil_prompt_rendered = False # Reset HIL flag
+    st.session_state.last_agent_turn_processed = False # Reset feedback flag
 
     new_conv_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     st.session_state.conversations[new_conv_id] = {
@@ -255,7 +259,7 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
         if proposed_code_raw.strip().lower() == "undefined" or proposed_code_raw.strip() == "":
             proposed_code = "# No valid code was proposed."
         else:
-            # Remove leading text like "Proposed Code:", "undefined" if they are part of the string
+            # Remove leading text like "Thought:", "Proposed Code:", "undefined" if they are part of the string
             # This regex aims to be robust against variations in how the agent might prefix the code
             cleaned_code = re.sub(r"^.*?(?:Thought:|Proposed Code:|\n)+", "", proposed_code_raw, flags=re.DOTALL | re.IGNORECASE)
             # Ensure only actual code lines are kept and remove empty lines
@@ -264,7 +268,7 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
                 proposed_code = "# No valid code was proposed."
         
         # Additional cleanup: remove any standalone "undefined" instances case-insensitively
-        # This is a direct replacement for any lingering "undefined"
+        # This is a direct replacement for any lingering "undefined" that might not be caught by the above
         proposed_code = re.sub(r'\bundefined\b', '', proposed_code, flags=re.IGNORECASE).strip()
         # Re-check if code is now empty after cleaning 'undefined'
         if not proposed_code:
@@ -284,9 +288,9 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
             if st.button("✅ Approve & Execute", key="approve_code"):
                 
                 # Append thought and code to chat history BEFORE execution
-                get_current_messages().append({"role": "assistant", "content": {"type": "thought", "text": thought_text}})
+                get_current_messages().append({"role": "assistant", "content": {"type": "content_text", "text": thought_text}})
                 if proposed_code != "# No code was proposed." and proposed_code.strip():
-                    get_current_messages().append({"role": "assistant", "content": f"**Executed Code:**\n```python\n{proposed_code}\n```"})
+                    get_current_messages().append({"role": "assistant", "content": {"type": "content_text", "content_text": f"**Executed Code:**\n```python\n{proposed_code}\n```"}})
                 
                 st.session_state.last_executed_code = proposed_code
                 st.session_state.last_successful_output = None # Reset for new execution
@@ -353,16 +357,18 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
                 st.session_state.agent_continuation_needed = True
                 st.session_state.pending_action = None # Clear pending action after processing
                 st.session_state.hil_prompt_rendered = True # Mark HIL as rendered for this action
+                st.session_state.last_agent_turn_processed = True # Mark that an agent turn has been processed for feedback
                 st.rerun()
         
         with col2:
             if st.button("❌ Cancel", key="cancel_code"):
                 cancellation_message = "Code execution CANCELED by user."
-                get_current_messages().append({"role": "assistant", "content": f"*{cancellation_message}*"})
+                get_current_messages().append({"role": "assistant", "content": {"type": "content_text", "content_text": f"*{cancellation_message}*"}})
                 st.session_state.last_processed_observation = cancellation_message
                 st.session_state.agent_continuation_needed = True # Signal agent to process the cancellation message
                 st.session_state.pending_action = None # Clear pending action
                 st.session_state.hil_prompt_rendered = True # Mark HIL as rendered
+                st.session_state.last_agent_turn_processed = True # Mark that an agent turn has been processed for feedback
                 st.rerun()
 
 # --- Handle Task Completed interception ---
@@ -380,7 +386,7 @@ if st.session_state.pending_final_answer:
             chart_msg = st.session_state.last_generated_chart_data
             st.subheader(chart_msg.get("title", "Generated Chart"))
             st.line_chart(chart_msg["data"], x=chart_msg.get("x_label"), y=chart_msg.get("y_label"), use_container_width=True)
-            st.caption("Generated visualization.")
+            st.caption("Generated visualization. Always verify results.")
 
         if st.session_state.last_generated_plot_file:
             file_msg = st.session_state.last_generated_plot_file
@@ -389,7 +395,7 @@ if st.session_state.pending_final_answer:
                 label=file_msg.get("download_label"), data=file_msg.get("data"),
                 file_name=file_msg.get("file_name", "download.png"), mime=file_msg.get("mime", "image/png")
             )
-            st.caption("Generated visualization.")
+            st.caption("Generated visualization. Always verify results.")
 
         final_answer_content = st.session_state.pending_final_answer["final_answer"] if isinstance(st.session_state.pending_final_answer, dict) else st.session_state.pending_final_answer
         st.markdown(final_answer_content)
@@ -398,23 +404,6 @@ if st.session_state.pending_final_answer:
         if st.session_state.last_agent_action_log_entry:
             with st.expander("Show Agent's Final Thought Process"):
                 st.code(st.session_state.last_agent_action_log_entry, language='ansi')
-
-        st.markdown("---")
-        if not st.session_state.get('feedback_given', False):
-            st.write("Was this response helpful?")
-            fb_col1, fb_col2, fb_col3 = st.columns([1,1,5])
-            with fb_col1:
-                if st.button("👍", key="helpful"):
-                    st.session_state.feedback_given = True
-                    st.toast("Thank you for your feedback!", icon="✅")
-                    st.rerun()
-            with fb_col2:
-                if st.button("👎", key="unhelpful"):
-                    st.session_state.feedback_given = True
-                    st.toast("Thank you for your feedback! We'll use it to improve.", icon="💡")
-                    st.rerun()
-        else:
-            st.write("✓ _Feedback received. Thank you!_")
 
         # Reset state after completion
         st.session_state.pending_final_answer = None
@@ -427,14 +416,41 @@ if st.session_state.pending_final_answer:
         st.session_state.last_generated_chart_data = None
         st.session_state.last_generated_plot_file = None
         st.session_state.execution_count = 0
-        st.session_state.hil_prompt_rendered = False # Ensure HIL flag is reset
+        st.session_state.hil_prompt_rendered = False # Ensure HIL is reset
+        st.session_state.last_agent_turn_processed = True # Mark that an agent turn has been processed for feedback
+
+
+# --- Feedback Section ---
+# This block is now placed to render after any agent output (HIL or final answer)
+if st.session_state.get("last_agent_turn_processed", False) and not st.session_state.get("feedback_given", False):
+    with st.chat_message("assistant"):
+        st.markdown("---")
+        st.write("Was this response helpful?")
+        fb_col1, fb_col2, fb_col3 = st.columns([1,1,5])
+        with fb_col1:
+            if st.button("👍", key="helpful"):
+                st.session_state.feedback_given = True
+                st.toast("Thank you for your feedback!", icon="✅")
+                st.session_state.last_agent_turn_processed = False # Reset for next turn
+                st.rerun()
+        with fb_col2:
+            if st.button("👎", key="unhelpful"):
+                st.session_state.feedback_given = True
+                st.toast("Thank you for your feedback! We'll use it to improve.", icon="💡")
+                st.session_state.last_agent_turn_processed = False # Reset for next turn
+                st.rerun()
+        with fb_col3:
+            st.empty() # Push buttons to the left
+
 
 # --- Agent Invocation Logic ---
+# This block handles invoking the agent when it needs to continue processing
 if (st.session_state.agent_continuation_needed or st.session_state.get("last_user_prompt")) and \
    not st.session_state.pending_action and not st.session_state.pending_final_answer:
     
     agent_input = None
     if st.session_state.agent_continuation_needed:
+        # Construct input for agent to continue from observation
         base_scratchpad = st.session_state.last_agent_action_log_entry or ""
         current_observation = st.session_state.last_processed_observation
         agent_input = {
@@ -444,12 +460,17 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
         st.session_state.agent_continuation_needed = False
         st.session_state.last_processed_observation = None
         st.session_state.last_agent_action_log_entry = None
+        st.session_state.hil_prompt_rendered = False # Reset HIL flag as we are now processing the agent's next step
+
     elif st.session_state.get("last_user_prompt"):
+        # This is the initial invocation for a new user prompt
         agent_input = {"input": st.session_state.last_user_prompt}
         st.session_state.current_agent_chain_user_prompt = st.session_state.last_user_prompt
-        st.session_state.last_user_prompt = None
-        st.session_state.execution_count = 0
-        st.session_state.feedback_given = False
+        st.session_state.last_user_prompt = None # Clear the direct user prompt
+        st.session_state.execution_count = 0 # Reset execution count for new chain
+        st.session_state.feedback_given = False # Reset feedback for new chain
+        st.session_state.hil_prompt_rendered = False # Reset HIL flag
+        st.session_state.last_agent_turn_processed = False # Reset feedback prompt flag
 
     if agent_input:
         with st.chat_message("assistant"):
@@ -463,20 +484,29 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                     agent_output = response["output"]
 
                 captured_logs = st.session_state.callback_logs_buffer.getvalue()
-                with thought_process_placeholder.expander("Show Agent's Thought Process"):
-                    st.code(captured_logs, language='ansi')
+                # Display thought process only if there are logs
+                if captured_logs:
+                    with thought_process_placeholder.expander("Show Agent's Thought Process"):
+                        st.code(captured_logs, language='ansi')
 
-                st.markdown(f"**Agent's Final Response:** {agent_output}")
+                # Append the agent's actual output to the message history
                 get_current_messages().append({"role": "assistant", "content": agent_output})
                 
+                # Prepare for potential continuation or feedback
                 st.session_state.last_user_prompt = None
                 st.session_state.agent_continuation_needed = False
                 st.session_state.current_agent_chain_user_prompt = None
-                st.session_state.last_agent_action_log_entry = None
+                st.session_state.last_agent_action_log_entry = None # Clear logs after displaying/processing
+                st.session_state.last_processed_observation = None # Clear observation after processing
+                st.session_state.last_agent_turn_processed = True # Mark that an agent turn has been processed for feedback
+                st.rerun()
 
             except InterceptToolCall:
+                # This exception is caught by the callback handler when a tool is called.
+                # The HIL prompt or final answer processing will handle it.
                 pass 
             except Exception as e:
+                # Ensure stdout is restored if an error occurs mid-execution
                 if sys.stdout != st.session_state.callback_handler._original_stdout:
                     sys.stdout = st.session_state.callback_handler._original_stdout
 
@@ -485,15 +515,22 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
                 display_error_message = f"An unexpected error occurred: {error_message_str}"
                 st.error(display_error_message)
 
-                with thought_process_placeholder.expander("Agent's Process before error"):
-                    st.code(captured_logs, language='ansi')
+                # Display logs if available
+                if captured_logs:
+                    with thought_process_placeholder.expander("Agent's Process before error"):
+                        st.code(captured_logs, language='ansi')
                 
-                get_current_messages().append({"role": "assistant", "content": f"**Error:** {display_error_message}\n**Logs:**\n```ansi\n{captured_logs}\n```"})
-                start_new_chat() # Reset for a clean slate
-                get_current_messages().append({"role": "assistant", "content": "*(Agent session has been reset due to an error. Please try again.)*"})
+                # Add error message to chat history
+                get_current_messages().append({"role": "assistant", "content": {"type": "content_text", "content_text": f"**Error:** {display_error_message}\n**Logs:**\n```ansi\n{captured_logs}\n```"}})
+                
+                # Reset for a clean slate and inform user
+                st.warning("Agent session has encountered an error and will be reset. Please start a new chat.")
+                start_new_chat() 
+                get_current_messages().append({"role": "assistant", "content": {"type": "content_text", "content_text": "*(Agent session has been reset due to an error. Please start a new chat.)*"}})
                 st.rerun()
 
 # --- Chat Input ---
+# Only show chat input if the agent is not waiting for HIL approval or a final answer
 if not st.session_state.pending_action and \
    not st.session_state.agent_continuation_needed and \
    not st.session_state.pending_final_answer:
@@ -503,11 +540,15 @@ if not st.session_state.pending_action and \
         current_conv_id = st.session_state.current_conversation_id
         current_conv = st.session_state.conversations[current_conv_id]
         
+        # Dynamically update conversation display name on first user message
         if len(current_conv["messages"]) == 1 and "New Conversation" in current_conv["display_name"]:
             new_display_name = user_prompt[:50] + "..." if len(user_prompt) > 50 else user_prompt
             current_conv["display_name"] = new_display_name
 
         get_current_messages().append({"role": "user", "content": user_prompt})
-        st.session_state.last_user_prompt = user_prompt
+        st.session_state.last_user_prompt = user_prompt # Store for agent invocation
         st.session_state.start_time = time.time() # Start performance timer
+        st.session_state.hil_prompt_rendered = False # Reset HIL flag for new user prompt
+        st.session_state.last_agent_turn_processed = False # Reset feedback flag for new user prompt
+        st.session_state.feedback_given = False # Ensure feedback is reset for new user input
         st.rerun()

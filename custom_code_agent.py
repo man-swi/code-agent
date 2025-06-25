@@ -123,6 +123,7 @@ def start_new_chat():
     st.session_state.feedback_given = False # Reset feedback status
     st.session_state.hil_prompt_rendered = False # Reset HIL flag
     st.session_state.last_agent_turn_processed = False # Reset feedback flag
+    st.session_state.start_time = None # Reset start time
 
     new_conv_id = f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     st.session_state.conversations[new_conv_id] = {
@@ -358,6 +359,15 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
                 st.session_state.pending_action = None # Clear pending action after processing
                 st.session_state.hil_prompt_rendered = True # Mark HIL as rendered for this action
                 st.session_state.last_agent_turn_processed = True # Mark that an agent turn has been processed for feedback
+                
+                # --- Metrics Logic Adjusted Here ---
+                if st.session_state.start_time:
+                    end_time = time.time()
+                    processing_time = end_time - st.session_state.start_time
+                    st.info(f"💡 **Total Processing Time:** {processing_time:.2f} seconds")
+                    st.session_state.start_time = None # Reset timer
+                # --- End Metrics Logic ---
+
                 st.rerun()
         
         with col2:
@@ -369,6 +379,15 @@ if st.session_state.pending_action and not st.session_state.get("hil_prompt_rend
                 st.session_state.pending_action = None # Clear pending action
                 st.session_state.hil_prompt_rendered = True # Mark HIL as rendered
                 st.session_state.last_agent_turn_processed = True # Mark that an agent turn has been processed for feedback
+
+                # --- Metrics Logic Adjusted Here ---
+                if st.session_state.start_time:
+                    end_time = time.time()
+                    processing_time = end_time - st.session_state.start_time
+                    st.info(f"💡 **Total Processing Time:** {processing_time:.2f} seconds")
+                    st.session_state.start_time = None # Reset timer
+                # --- End Metrics Logic ---
+                
                 st.rerun()
 
 # --- Handle Task Completed interception ---
@@ -376,11 +395,13 @@ if st.session_state.pending_final_answer:
     with st.chat_message("assistant"):
         st.success("Task Completed!")
         
+        # --- Metrics Logic Moved Here for Final Answer ---
         if st.session_state.start_time:
             end_time = time.time()
             processing_time = end_time - st.session_state.start_time
             st.info(f"💡 **Total Processing Time:** {processing_time:.2f} seconds")
-            st.session_state.start_time = None
+            st.session_state.start_time = None # Reset timer
+        # --- End Metrics Logic ---
 
         if st.session_state.last_generated_chart_data:
             chart_msg = st.session_state.last_generated_chart_data
@@ -432,12 +453,24 @@ if st.session_state.get("last_agent_turn_processed", False) and not st.session_s
                 st.session_state.feedback_given = True
                 st.toast("Thank you for your feedback!", icon="✅")
                 st.session_state.last_agent_turn_processed = False # Reset for next turn
+                # Metrics: capture time after feedback is given
+                if st.session_state.start_time:
+                    end_time = time.time()
+                    processing_time = end_time - st.session_state.start_time
+                    st.info(f"💡 **Total Processing Time:** {processing_time:.2f} seconds")
+                    st.session_state.start_time = None # Reset timer
                 st.rerun()
         with fb_col2:
             if st.button("👎", key="unhelpful"):
                 st.session_state.feedback_given = True
                 st.toast("Thank you for your feedback! We'll use it to improve.", icon="💡")
                 st.session_state.last_agent_turn_processed = False # Reset for next turn
+                # Metrics: capture time after feedback is given
+                if st.session_state.start_time:
+                    end_time = time.time()
+                    processing_time = end_time - st.session_state.start_time
+                    st.info(f"💡 **Total Processing Time:** {processing_time:.2f} seconds")
+                    st.session_state.start_time = None # Reset timer
                 st.rerun()
         with fb_col3:
             st.empty() # Push buttons to the left
@@ -471,6 +504,8 @@ if (st.session_state.agent_continuation_needed or st.session_state.get("last_use
         st.session_state.feedback_given = False # Reset feedback for new chain
         st.session_state.hil_prompt_rendered = False # Reset HIL flag
         st.session_state.last_agent_turn_processed = False # Reset feedback prompt flag
+        # Metrics: start timer when a new user prompt is submitted
+        st.session_state.start_time = time.time()
 
     if agent_input:
         with st.chat_message("assistant"):
@@ -547,8 +582,10 @@ if not st.session_state.pending_action and \
 
         get_current_messages().append({"role": "user", "content": user_prompt})
         st.session_state.last_user_prompt = user_prompt # Store for agent invocation
-        st.session_state.start_time = time.time() # Start performance timer
-        st.session_state.hil_prompt_rendered = False # Reset HIL flag for new user prompt
-        st.session_state.last_agent_turn_processed = False # Reset feedback flag for new user prompt
+        
+        # Reset states for a new user turn
         st.session_state.feedback_given = False # Ensure feedback is reset for new user input
+        st.session_state.hil_prompt_rendered = False # Reset HIL flag for new user prompt
+        st.session_state.last_agent_turn_processed = False # Reset feedback prompt flag
+        st.session_state.start_time = time.time() # Start performance timer when a new user prompt is received
         st.rerun()

@@ -1,4 +1,4 @@
-# callbacks.py
+# utils/callbacks.py
 import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.agents import AgentAction, AgentFinish
